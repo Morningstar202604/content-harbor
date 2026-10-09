@@ -426,3 +426,42 @@ def prune_tasks(conn, keep=200):
         conn.commit()
     except Exception:
         pass
+
+
+# ------------------- 跨表查询（AGENT.md:339 原生 SQL 只住 db.py） -------------------
+
+def list_pending_human(conn):
+    """待人工处理的发布实例（join 标题），前端角标轮询用。"""
+    return conn.execute(
+        """SELECT p.article_id, a.title, p.platform, p.account, p.edit_url,
+                  p.post_id, p.updated_at
+           FROM publications p LEFT JOIN articles a ON a.id = p.article_id
+           WHERE p.status = 'pending_human'
+           ORDER BY p.updated_at DESC""").fetchall()
+
+
+def list_publications_joined(conn, article_id=None, platform=None):
+    """发布实例 + 文章标题，按更新时间倒序；两个过滤条件都可选。"""
+    sql = ("SELECT p.*, a.title FROM publications p "
+           "LEFT JOIN articles a ON a.id = p.article_id WHERE 1=1")
+    args = []
+    if article_id is not None:
+        sql += " AND p.article_id=?"
+        args.append(article_id)
+    if platform is not None:
+        sql += " AND p.platform=?"
+        args.append(platform)
+    sql += " ORDER BY p.updated_at DESC"
+    return conn.execute(sql, args).fetchall()
+
+
+def list_failed_jobs(conn, type_=None, limit=50):
+    """失败的 jobs 流水（AIGC 门禁拒绝记录靠它回溯）。"""
+    sql = "SELECT * FROM jobs WHERE 1=1"
+    args = []
+    if type_:
+        sql += " AND type=?"
+        args.append(type_)
+    sql += " AND status='failed' ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    return conn.execute(sql, args).fetchall()

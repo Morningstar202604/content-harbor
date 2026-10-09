@@ -22,14 +22,13 @@
 """
 
 import sys
-import os
 from pathlib import Path
 
 # 把 backed/ 加入 Python 路径，确保能 import service
 _THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_THIS_DIR / "backed"))
 
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
 from service.publishing.service import Hub
 
@@ -131,10 +130,8 @@ def ai_image_prompts(article_id: int, n: int = 3) -> dict:
 
 @mcp.tool()
 def publish_article(article_id: int, platforms: list,
-                     draft_only: bool = False, account: str = "default") -> dict:
+                    draft_only: bool = False, account: str = "default") -> dict:
     """异步发布文章到指定平台，返回 task_id。用 get_task 查询进度。"""
-    from service.publishing.tasks import TaskManager
-    conn = _get_hub().conn
     task_id = _get_hub().tasks.submit("publish", article_id=article_id,
                                        platforms=platforms, account=account,
                                        draft_only=draft_only)
@@ -154,6 +151,9 @@ def update_remote_article(article_id: int, platforms: list = None,
 @mcp.tool()
 def list_platforms() -> list:
     """列出所有可用平台及其在线状态。"""
+    # 适配器"导入即注册"，注册动作在 service.py 导入时发生；MCP 进程里若还没
+    # 创建过 Hub，这里必须显式触发一次注册。
+    from service.publishing import adapters as _adapters  # noqa: F401
     from service.publishing.adapters.base import ADAPTERS
     return [{"id": a.id, "name": a.name, "needs_browser": a.needs_browser}
             for a in ADAPTERS.values()]
@@ -232,10 +232,11 @@ def main():
     parser.add_argument("--port", type=int, default=8900)
     args = parser.parse_args()
 
-    if args.transport == "stdio":
-        mcp.run()
-    else:
-        mcp.run(transport="sse", port=args.port)
+    if args.transport == "sse":
+        # FastMCP.run() 只接 transport，host/port 由构造参数决定
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = args.port
+    mcp.run(transport=args.transport)
 
 
 if __name__ == "__main__":

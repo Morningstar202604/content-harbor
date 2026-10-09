@@ -9,7 +9,6 @@ from functools import wraps
 from enum import Enum
 from dataclasses import dataclass, asdict
 from fastapi import Request
-from sqlalchemy.orm import Session
 
 from utils.logger import get_logger, setup_logger
 from config import settings

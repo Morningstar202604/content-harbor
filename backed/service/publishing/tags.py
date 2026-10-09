@@ -185,14 +185,14 @@ def merge_tags(conn, from_tag, to_tag):
         (f"%{from_tag}%",)).fetchall()
     affected = 0
     for row in rows:
-        tags = [t.strip() for t in row["tags"].split(",") if t.strip()]
+        tags_list = [t.strip() for t in row["tags"].split(",") if t.strip()]
         new_tags = []
-        for t in tags:
-            if t.lower() == from_tag.lower():
-                if to_tag not in new_tags:
-                    new_tags.append(to_tag)
-            else:
-                new_tags.append(t)
+        for t in tags_list:
+            # 命中 from_tag 换成 to_tag，其余原样；随后统一去重——否则
+            # "py,Python" 合并后会留下 "Python,Python" 这种重复标签。
+            mapped = to_tag if t.lower() == from_tag.lower() else t
+            if mapped not in new_tags:
+                new_tags.append(mapped)
         conn.execute("UPDATE articles SET tags=?, updated_at=? WHERE id=?",
                      (",".join(new_tags), time.time(), row["id"]))
         affected += 1

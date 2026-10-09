@@ -243,29 +243,32 @@ class Scheduler:
         try:
             task_id = self.hub.tasks.submit(
                 "publish",
-                article_id=row["article_id"],
-                platforms=json.loads(row["platforms"]),
-                account=row["account"],
-                draft_only=bool(row["draft_only"]),
+                article_id=task_row["article_id"],
+                platforms=json.loads(task_row["platforms"]),
+                account=task_row["account"],
+                draft_only=bool(task_row["draft_only"]),
             )
             # 投递成功：更新统计
-            next_run = _calc_next_run(row["schedule_type"], row["schedule_expr"], base=now)
+            next_run = _calc_next_run(task_row["schedule_type"],
+                                     task_row["schedule_expr"], base=now)
             self.conn.execute(
                 """UPDATE scheduled_tasks SET
                     last_run=?, next_run=?, run_count=run_count+1, last_task_id=?, updated_at=?
                    WHERE id=?""",
-                (now, next_run, task_id or "", now, row["id"]))
+                (now, next_run, task_id or "", now, task_row["id"]))
             # 一次性任务执行完自动 disable
-            if row["schedule_type"] == "once":
+            if task_row["schedule_type"] == "once":
                 self.conn.execute(
                     "UPDATE scheduled_tasks SET enabled=0, updated_at=? WHERE id=?",
-                    (now, row["id"]))
+                    (now, task_row["id"]))
             self.conn.commit()
-        except Exception as e:
-            # 投递失败：推迟 5 分钟重试，防止雪崩
+        except Exception:  # aqg: top-level boundary（投递失败不得让任务卡在过去，推迟重试是兜底契约）
+            # 推迟 5 分钟重试，防止雪崩。
+            # row 是入参 task_row，不是 _tick 的循环变量——原先写 row 直接 NameError，
+            # 失败分支自己也崩，结果 next_run 不更新、每 30 秒重复炸一次。
             self.conn.execute(
                 """UPDATE scheduled_tasks SET next_run=?, updated_at=? WHERE id=?""",
-                (now + 300, now, row["id"]))
+                (now + 300, now, task_row["id"]))
             self.conn.commit()
 
     # ---------------- CRUD 接口（API 层调用）----------------
@@ -274,7 +277,10 @@ class Scheduler:
                schedule_type="once", schedule_expr="", title=""):
         """创建定时任务。自动计算 next_run。"""
         now = time.time()
-        next_run = _calc_next_run(schedule_type, schedule_expr) if schedule_expr else None
+        # 表达式为空也交给 _calc_next_run：它有 +1h 兜底，返回非空。
+        # 原先写成 `if schedule_expr else None`，结果是建出一条 next_run=NULL
+        # 的僵尸任务——_tick 明确过滤 NULL，它永远不会执行也没人报错。
+        next_run = _calc_next_run(schedule_type, schedule_expr or "")
         cur = self.conn.execute(
             """INSERT INTO scheduled_tasks
                (article_id, platforms, account, draft_only, schedule_type,

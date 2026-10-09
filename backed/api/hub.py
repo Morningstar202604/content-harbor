@@ -316,34 +316,24 @@ def tasks_resume(task_id: str, body: Optional[ResumeIn] = None):
 def pending_human():
     """需要人工处理的发布实例（如掘金草稿等人点"确定并发布"）。
     前端轮询这个端点做角标提醒；点"去处理"直接打开草稿编辑页。"""
-    rows = get_hub().conn.execute(
-        """SELECT p.article_id, a.title, p.platform, p.account, p.edit_url,
-                  p.post_id, p.updated_at
-           FROM publications p LEFT JOIN articles a ON a.id = p.article_id
-           WHERE p.status = 'pending_human'
-           ORDER BY p.updated_at DESC""").fetchall()
-    return [dict(r) for r in rows]
+    from service.publishing import db
+    return [dict(r) for r in db.list_pending_human(get_hub().conn)]
 
 
 @hub_router.get("/publications")
 def publications(article_id: int = None, platform: str = None):
-    sql = ("SELECT p.*, a.title FROM publications p "
-           "LEFT JOIN articles a ON a.id = p.article_id WHERE 1=1")
-    args = []
-    if article_id is not None:
-        sql += " AND p.article_id=?"
-        args.append(article_id)
-    if platform is not None:
-        sql += " AND p.platform=?"
-        args.append(platform)
-    sql += " ORDER BY p.updated_at DESC"
-    return [dict(r) for r in get_hub().conn.execute(sql, args).fetchall()]
+    from service.publishing import db
+    return [dict(r) for r in db.list_publications_joined(
+        get_hub().conn, article_id=article_id, platform=platform)]
 
 
 # ---------------- 账号 / 平台 ----------------
 
 @hub_router.get("/platforms")
 def platforms():
+    # 适配器是"导入即注册"的，而注册发生在 service.py 被导入时；本端点可能
+    # 在 Hub 首次创建之前就被打到，所以这里显式触发一次注册再读表。
+    from service.publishing import adapters as _adapters  # noqa: F401
     from service.publishing.adapters.base import ADAPTERS
     return [{"id": a.id, "name": a.name, "needs_browser": a.needs_browser}
             for a in ADAPTERS.values()]
@@ -473,9 +463,8 @@ def ai_gate():
             "dangerous_terms": len(g.DANGEROUS_PATTERNS),
             "human_review_gate": "AI 源内容禁止直接 publish，须 draft_only + 人工确认"}
     try:
-        rows = get_hub().conn.execute(
-            "SELECT * FROM jobs WHERE type='publish' AND status='failed' "
-            "ORDER BY id DESC LIMIT 50").fetchall()
+        from service.publishing import db
+        rows = db.list_failed_jobs(get_hub().conn, type_="publish", limit=50)
         denied = [dict(r) for r in rows if any(
             k in (r["message"] or "") for k in ("门禁", "高危", "人工确认", "合规"))]
         snap["recent_denied"] = denied[:10]

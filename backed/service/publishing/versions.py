@@ -113,10 +113,12 @@ def rollback(conn, version_id):
     db.update_article(conn, v["article_id"],
                       title=v["title"], content_md=v["content_md"],
                       summary=v["summary"], tags=v["tags"])
-    # 记录这次回滚
-    capture(conn, dict(v) if not art else dict(art),
-            change_kind="rollback", change_note=f"回滚到版本 {version_id}",
-            created_by="human")
+    # 记录这次回滚。必须存**回滚后的内容**（dict(v)）而不是 dict(art)：
+    # art 是回滚前的内容，上一步已经以 pre-rollback 存过，content_hash 与
+    # 最新一条相同会被 capture 的去重逻辑跳过，于是 change_kind='rollback'
+    # 这条记录永远写不进去——回滚在历史里就看不到了。
+    capture(conn, dict(v), change_kind="rollback",
+            change_note=f"回滚到版本 {version_id}", created_by="human")
     return True, f"已回滚到版本 {version_id}"
 
 

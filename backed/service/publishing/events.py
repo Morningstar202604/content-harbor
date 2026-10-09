@@ -82,10 +82,12 @@ def register_webhook(url, events=None, secret="", enabled=True):
     init_events()
     c = _conn()
     events_json = json.dumps(events or ["*"], ensure_ascii=False)
-    c.execute("INSERT INTO webhooks (url, secret, events, enabled) VALUES (?, ?, ?, ?)",
-              (url, secret or "", events_json, 1 if enabled else 0))
+    # lastrowid 在 Cursor 上，不在 Connection 上——直接 c.lastrowid 会 AttributeError
+    cur = c.execute(
+        "INSERT INTO webhooks (url, secret, events, enabled) VALUES (?, ?, ?, ?)",
+        (url, secret or "", events_json, 1 if enabled else 0))
     c.commit()
-    wid = c.lastrowid
+    wid = cur.lastrowid
     c.close()
     return wid
 
