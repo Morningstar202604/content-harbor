@@ -2,6 +2,49 @@
 
 ---
 
+## [0.6.1] - 2026-10-10
+
+> 主题：**修隐患 + 补测试门禁**。无新功能；发现并修掉 6 个"上过线但跑不通"的缺陷，
+> 然后把 tech-debt 台账 T2 的"一键回归门禁"落地。
+
+### 修复（全部由新增测试先复现，再改源码）
+
+| # | 症状 | 根因 | 位置 |
+|---|---|---|---|
+| 1 | **后端完全起不来**，`create_app()` 直接 ImportError | `utils/audit.py` 留着 `from sqlalchemy.orm import Session`，而 SQLAlchemy 早就不在依赖里（死 import） | `backed/utils/audit.py` |
+| 2 | **MCP Server 起不来**，`python mcp_server.py` 报无 `fastmcp` 模块 | 用 `from fastmcp import FastMCP`，但 `mcp>=1.0` 的导入路径是 `mcp.server.fastmcp`；且 `run(transport="sse", port=)` 不接 `port` 参数 | `mcp_server.py` |
+| 3 | **Webhook 注册必 500**，POST `/webhooks` 永远失败 | `c.lastrowid` 写在 `Connection` 上——该属性在 `Cursor` 上 | `backed/service/publishing/events.py` |
+| 4 | **定时发布静默失效**：到期任务每 30 秒炸一次且永远不执行 | `_execute` 把入参 `task_row` 写成 `row`（`_tick` 的循环变量名），F821；失败分支自己也引用 `row`，于是 `next_run` 永不更新。空表达式建出的任务 `next_run=NULL` 同样是僵尸 | `backed/service/publishing/scheduler.py` |
+| 5 | **回滚不落痕**，历史里查不到 `change_kind='rollback'` 记录 | 回滚时快照的是 `dict(art)`（回滚前内容），与刚写入的 `pre-rollback` 内容哈希相同，被去重逻辑吞掉 | `backed/service/publishing/versions.py` |
+| 6 | **`GET /platforms` 返回空数组**，平台列表像不存在 | 适配器"导入即注册"，但注册只发生在 `service.py` 被导入时；先打到 `/platforms` 的进程拿到的注册表是空的 | `backed/service/publishing/adapters/__init__.py`、`backed/api/hub.py`、`mcp_server.py` |
+
+附带：`tags.merge_tags` 合并 `py,Python` → 留下 `Python,Python` 重复标签（去重只护了映射侧）。
+
+### 测试与门禁（tech-debt T2）
+
+- 新增 `backed/tests/`，**143 个用例**：
+  - 模块导入层（每个真实模块裸 import，专抓"编译过但装不上"的依赖漏洞）
+  - DB 层：schema / 迁移幂等 / `LockedConnection` 6 线程串行化 / 文章与发布 CRUD / 跨表查询
+  - 任务引擎：提交、串行消费、验证码→人工、网络错误→重试 3 次→失败、人工恢复、串行性
+  - 标签治理：归一化、别名合并、合并去重、智能降级
+  - 版本历史：快照去重、回滚、回滚的回滚、行级 diff、裁剪
+  - 事件系统：webhook CRUD、HMAC 签名、通知环形缓冲、任务事件映射
+  - 调度器：表达式解析 / CRUD / 投递失败推迟 / tick 拾取
+  - REST 接线：文章 CRUD、任务生命周期、webhooks、tags、pending-human、platforms 走真实 FastAPI TestClient
+- `conftest.py` 把 DB / 事件日志 / webhook 派发线程全关进 pytest 临时目录，测试不碰开发库
+- 新增 `scripts/check_all.ps1` 与 `scripts/check_all.sh`：compileall → ruff → pytest → vite build，
+  任一步失败即停，末行给 PASS/FAIL
+- `pyproject.toml` 新增 `[tool.ruff]`：门禁只查 `E9/F7/F82`（未定义名、运行时错误、语法错误），
+  风格与卫生类存量债暂不纳入，避免 58 条噪音把门禁变成没人看的东西
+- CI 升级：backend job 增加 ruff + pytest；新增 frontend job 跑 `pnpm build`
+- `.gitignore` 补 `backed/service/data/` 与 `*.db-wal` / `*.db-shm`（WAL 边车文件）
+- `api/hub.py` 清掉 3 处裸 SQL，下沉到 `db.py` 新增的 `list_pending_human` /
+  `list_publications_joined` / `list_failed_jobs`（遵守 AGENT.md §8）
+- `uv.lock` 重新解析：此前 lock 与 `pyproject.toml` 已不同步（lock 里还留着
+  aiomysql/pymysql/sqlalchemy/greenlet），`uv sync` 一次就掉进"缺依赖起不来"
+
+---
+
 ## [0.6.0] - 2026-10-09
 
 ### 新增：多模型管理

@@ -320,13 +320,31 @@ python -m backed.cli approve-task <id>   # 批准等待中任务
 
 ### 测试
 
-当前测试 scaffold 已删除，待补充：
+测试套件已就位（143 个用例，`backed/tests/`），提交前跑一键门禁：
+
 ```bash
-# 目标（规划中）
-pytest backed/tests/ -v
-pytest backed/tests/unit/
-pytest backed/tests/integration/
+# Windows
+pwsh -File scripts\check_all.ps1
+# Linux / macOS / Git Bash
+bash scripts/check_all.sh
 ```
+
+门禁四道：`compileall` 语法 → `ruff` 静态 → `pytest` 单测 → `vite build` 前端。
+单跑某一类：
+
+```bash
+cd backed
+uv run pytest -q                                    # 全部
+uv run pytest tests/test_tasks.py -q                # 任务引擎
+uv run pytest tests/test_api_integration.py -q      # REST 接线
+uv run ruff check .                                 # 静态门禁
+```
+
+`conftest.py` 会把 DB 路径、事件日志、webhook 派发线程全部关进 pytest 临时目录，
+**不会碰开发库** `backed/service/data/hub.db`。
+
+注意：测试不得启动真实 Hub（会拉起浏览器池 + 调度器 + atexit 钩子）——
+需要 Hub 的地方用 `StubHub`（见 `tests/test_api_integration.py`）替换。
 
 ## 7. 提交规范
 

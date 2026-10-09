@@ -157,7 +157,7 @@ python cli.py status
 
 ## 四、Web 管理界面
 
-先把前端构建一次（`cd web && pnpm install && pnpm build`），产物落在 `web/dist/`，
+先把前端构建一次（`cd web && pnpm install && pnpm build`），产物落在 `server/static/`
 由后端挂载到根路径。启动后端后浏览器打开 `http://127.0.0.1:8000`。
 
 界面走「**晴空**」主题——明亮现代 SaaS 风：浅灰底 + 纯白卡片 + 飞书蓝主色，
@@ -191,6 +191,15 @@ pnpm install
 pnpm dev        # 开发模式，:5173，自动代理 /api 到后端（默认 :8000）
 pnpm build      # 构建到 server/static/（vite.config.js 决定），后端挂载此目录
 ```
+
+**提交前必跑（一键回归门禁）**：
+
+```bash
+pwsh -File scripts\check_all.ps1   # Windows
+bash scripts/check_all.sh          # Linux / macOS
+```
+
+四道：语法编译 → ruff 静态门禁 → 143 个 pytest 用例 → 前端构建。任一步失败即停。
 
 ---
 
