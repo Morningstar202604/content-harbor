@@ -8,7 +8,10 @@ __pycache__/
 backed/data/
 backed/logs/
 backed/database/data/
+backed/service/data/
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
 *.log
 
@@ -17,6 +20,9 @@ backed/database/data/
 .env.*
 !.env.example
 !.env.docker
+
+# AQG 工程纪律工作区（本地 only，不入库）
+.aqg/
 
 # 前端构建产物 / 依赖
 node_modules/
