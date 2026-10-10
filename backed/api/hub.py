@@ -219,7 +219,7 @@ def list_articles(status: str = None, limit: int = 100):
 
 @hub_router.post("/articles")
 def create_article(a: ArticleIn):
-    return {"id": get_hub().create(**a.dict())}
+    return {"id": get_hub().create(**a.model_dump())}
 
 
 @hub_router.get("/articles/{aid}")
@@ -232,7 +232,7 @@ def get_article(aid: int):
 
 @hub_router.put("/articles/{aid}")
 def update_article(aid: int, patch: ArticlePatch):
-    data = {k: v for k, v in patch.dict().items() if v is not None}
+    data = {k: v for k, v in patch.model_dump().items() if v is not None}
     ok, pending = get_hub().edit(aid, **data)
     return {"ok": ok, "pending_sync": pending}
 
@@ -524,7 +524,7 @@ def schedules_get(sid: int):
 
 @hub_router.put("/schedules/{sid}")
 def schedules_update(sid: int, body: SchedulePatch):
-    data = {k: v for k, v in body.dict().items() if v is not None}
+    data = {k: v for k, v in body.model_dump().items() if v is not None}
     ok = get_hub().scheduler.update(sid, **data)
     return {"ok": ok, **get_hub().scheduler.get(sid)}
 
@@ -735,7 +735,7 @@ def webhooks_create(body: WebhookIn):
 @hub_router.put("/webhooks/{wid}")
 def webhooks_update(wid: int, body: WebhookIn):
     from service.publishing import events as evt_mod
-    data = {k: v for k, v in body.dict().items() if v is not None}
+    data = {k: v for k, v in body.model_dump().items() if v is not None}
     ok = evt_mod.update_webhook(wid, **data)
     if not ok:
         raise HTTPException(404, "Webhook 不存在")

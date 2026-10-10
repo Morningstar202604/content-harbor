@@ -2,6 +2,33 @@
 
 ---
 
+## [0.6.3] - 2026-10-10
+
+> 主题：**依赖管理收口 + Pydantic v2 API 收尾**。无行为变更。
+
+### 移除
+
+- **删 `web/package-lock.json`**：与 `web/pnpm-lock.yaml` 双 lockfile 并存会让本地
+  与 CI 装出不同的依赖树。README / README.en / ci.yml / check_all 四处早已一律走
+  pnpm，全仓库零 npm 调用，故删 npm 那份（tech-debt 台账 #10）。
+  若 pnpm 装出问题，执行 `pnpm install` 会按 `pnpm-lock.yaml` 精确还原。
+
+### 修复
+
+- **`api/hub.py` 4 处 `.dict()` → `.model_dump()`**：`ArticleIn` / `ArticlePatch` /
+  `SchedulePatch` / `WebhookIn` 四处调用。`.dict()` 在 Pydantic v2 已弃用、v3 移除，
+  而 `pyproject.toml` 写的是 `pydantic>=2.0.0`（允许装 v3）——照现状升级即炸。
+
+### 门禁
+
+- `pyproject.toml` 新增 `filterwarnings`：把 `PydanticDeprecatedSince20` 升级为
+  **error**。这类问题编译期查不出、运行时也不炸，只在升级依赖那天爆；
+  现在让它在测试里红掉。护栏有效性已反向验证（注入一处 `.dict()` → 测试转红）。
+
+版本 0.6.2 → 0.6.3（无运行时行为变更，故不动 `uv.lock` 依赖集合）。
+
+---
+
 ## [0.6.2] - 2026-10-10
 
 ### 新增：数据备份（tech-debt 台账 #9）

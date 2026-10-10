@@ -50,12 +50,18 @@
 | #1 12 项修复未提交、无版本基线 | 0.6.1 分 4 笔 commit 重建回退基线（修复/测试/门禁/文档） | git `6bb43c9`…`926b113` |
 | #2 无一键回归门禁 | 新增 `scripts/check_all.{sh,ps1}` 四道：compileall → ruff → pytest → vite build；CI 同步补齐 ruff/pytest + 新增 frontend job | `scripts/check_all.ps1`、`scripts/check_all.sh`、`.github/workflows/ci.yml`、`backed/pyproject.toml [tool.ruff]` |
 | #9 data/ 单副本无备份 | 新增 `scripts/backup_data.py`：走 `sqlite3.Connection.backup()` 做在线一致性快照（不用停服务），备份后对副本跑 `PRAGMA integrity_check`；auth.json/config.json 权限收紧且拒绝落到仓库内 | `scripts/backup_data.py`、`backed/tests/test_backup_data.py` |
+| #10 双 lockfile 并存 | 删 `web/package-lock.json`，`web/pnpm-lock.yaml` 成为唯一 lockfile（README/README.en/ci.yml/check_all 四处早已一律走 pnpm，全仓库零 npm 调用） | `web/pnpm-lock.yaml` |
 | #6 requirements 全 `>=` 未锁版本 | 依赖管理已切 uv，`backed/uv.lock` 已随 0.6.1 重新解析并与 `pyproject.toml` 对齐（此前 lock 还停在 0.1.0 的依赖集合） | `backed/uv.lock` |
 | #7 构建产物入库且 hash 混杂 | `server/static/` 已入 .gitignore（部署时 build），仓库内无构建产物 | `.gitignore` |
 | #4 任务态存内存、重启丢状态 | 0.6.0 起任务状态落 `hub.db` 的 tasks 表，TaskManager 持久化 + 恢复 | `backed/service/publishing/tasks.py` |
 
 仍未清偿：#3（update/sync 切流引擎，即 T3/M5 主路径）、#5（共享驱动崩溃自愈，已列入"不建议现在还"）、
-#8（裸 except 151 处，按既定策略随触随改）、#10（双 lockfile）、#11（docs 目录结构）、#12（掘金草稿）。
+#8（裸 except 151 处，按既定策略随触随改）、#11（docs 目录结构）、#12（掘金草稿）。
+
+**暂不还 #11 的理由**：移动 `ARCHITECTURE.md` / `AUDIT.md` 到 `docs/` 会牵动 7 处引用，其中
+`CHANGELOG.md:159,177` 是历史条目——改历史则失真，不改则链接失效。根目录保留
+`AGENT.md` + `README.md` + `CHANGELOG.md` 作为入口已可导航，待 docs/ 目录本身有
+足够内容时再做，值得单独排。
 
 ## 四、权衡说明（对交付的影响）
 
