@@ -20,6 +20,35 @@ from utils.logger import log_security_event
 from utils.response_code import ResponseCode
 
 
+def _trusted_networks():
+    """受信代理网段：本机回环 + TRUSTED_NETS 追加。与 api/hub.py 的判定同源。"""
+    import os
+    from ipaddress import ip_network
+    nets = ["127.0.0.0/8", "::1/128"]
+    extra = os.environ.get("TRUSTED_NETS", "").strip()
+    if extra:
+        nets += [n.strip() for n in extra.split(",") if n.strip()]
+    parsed = []
+    for n in nets:
+        try:
+            parsed.append(ip_network(n, strict=False))
+        except ValueError:
+            continue          # 配错的网段直接忽略，不让限流整体失效
+    return parsed
+
+
+def _peer_is_trusted(peer: str) -> bool:
+    """对端（直连来源）是否受信代理。解析不出 IP 一律不信。"""
+    from ipaddress import ip_address
+    if not peer:
+        return False
+    try:
+        addr = ip_address(peer)
+    except ValueError:
+        return False
+    return any(addr in net for net in _trusted_networks())
+
+
 class _TokenBucket:
     """单个键的令牌桶"""
 
@@ -133,13 +162,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _get_client_ip(request: Request) -> str:
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
-        real_ip = request.headers.get("X-Real-IP")
-        if real_ip:
-            return real_ip
-        return request.client.host if request.client else "unknown"
+        """取真实客户端 IP 作为限流键。
+
+        X-Forwarded-For / X-Real-IP 由客户端自由填写，只在请求来自受信代理时
+        才采信——否则任何人每请求换一个 XFF 就能拿到新令牌桶，限流形同虚设。
+        受信判定复用 api/hub.py 的既有约定：本机回环 + TRUSTED_NETS 网段。
+        """
+        peer = request.client.host if request.client else ""
+        if _peer_is_trusted(peer):
+            forwarded_for = request.headers.get("X-Forwarded-For")
+            if forwarded_for:
+                # 多跳时取最左侧——那是链路最靠近客户端的那一跳
+                return forwarded_for.split(",")[0].strip()
+            real_ip = request.headers.get("X-Real-IP")
+            if real_ip:
+                return real_ip
+        return peer or "unknown"
 
     @staticmethod
     def _should_skip(request: Request) -> bool:

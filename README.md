@@ -200,7 +200,7 @@ pwsh -File scripts\check_all.ps1   # Windows
 bash scripts/check_all.sh          # Linux / macOS
 ```
 
-四道：语法编译 → ruff 静态门禁 → 176 个 pytest 用例 → 前端构建。任一步失败即停。
+四道：语法编译 → ruff 静态门禁 → 278 个 pytest 用例 → 前端构建。任一步失败即停。
 
 **备份数据（文章库 + 登录态）**：
 

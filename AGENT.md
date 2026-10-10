@@ -338,7 +338,7 @@ python -m backed.cli approve-task <id>   # 批准等待中任务
 
 ### 测试
 
-测试套件已就位（176 个用例，`backed/tests/`），提交前跑一键门禁：
+测试套件已就位（278 个用例，`backed/tests/`），提交前跑一键门禁：
 
 ```bash
 # Windows
