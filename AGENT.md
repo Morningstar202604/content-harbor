@@ -320,7 +320,7 @@ python -m backed.cli approve-task <id>   # 批准等待中任务
 
 ### 测试
 
-测试套件已就位（143 个用例，`backed/tests/`），提交前跑一键门禁：
+测试套件已就位（159 个用例，`backed/tests/`），提交前跑一键门禁：
 
 ```bash
 # Windows
@@ -342,6 +342,17 @@ uv run ruff check .                                 # 静态门禁
 
 `conftest.py` 会把 DB 路径、事件日志、webhook 派发线程全部关进 pytest 临时目录，
 **不会碰开发库** `backed/service/data/hub.db`。
+
+### 备份
+
+```bash
+cd backed
+uv run python ../scripts/backup_data.py              # 到 ~/harbor-backups
+uv run python ../scripts/backup_data.py --dry-run    # 只看计划
+```
+
+走 `sqlite3.Connection.backup()` 做在线一致性快照，不用停服务。`auth.json` 与
+`config.json` 含凭据，脚本会拒绝把备份写到仓库内。
 
 注意：测试不得启动真实 Hub（会拉起浏览器池 + 调度器 + atexit 钩子）——
 需要 Hub 的地方用 `StubHub`（见 `tests/test_api_integration.py`）替换。

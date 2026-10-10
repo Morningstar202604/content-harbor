@@ -1,6 +1,9 @@
 # tech-debt.md — 技术债台账与还债计划
 
 > 日期：2026-09-22 · 基线：AUDIT.md 已修 12 项 · 本阶段**只读盘点**（本文件为唯一新增）
+> **2026-10-10 更新**：#1（无版本基线）、#2（无一键回归门禁）、#9（data/ 无备份）已清偿，
+> 见文末「五、已清偿」。#6/#7 随依赖管理切到 uv + `backed/service/data/` 入 .gitignore 后
+> 自动失效。#4（任务态存内存）已被统一任务引擎的 tasks 表解决。台账其余条目仍未动。
 > 定级方法：3×3 矩阵 = 发生概率(H/M/L) × 影响(H/M/L)，乘积 6–9=H / 3–4=M / 1–2=L；
 > 排序键 =（概率×影响）÷ 还债成本，同分先还"回滚难度低"的。
 
@@ -39,6 +42,20 @@
 | 共享驱动崩溃自愈（#5） | M | **概率低 × 改动风险高**：原结构同样有此病非新债；单例刚作为 P0 修复完成（9/9 全绿），现在动它=高风险低频收益 | 首次真实崩溃发生，或部署到无人值守环境时 |
 | Hub 上帝类 service.py / api.py 单文件拆分 | M | **违反绞杀者战略（ADR-003）**：架构明确"适配器与 Hub 原样保留"，整体拆分=大爆炸重写，正是 ADR 否决的备选；切流时会顺带瘦身 | T3 完成、双路径收敛（M5 收官）后按触碰频率自然拆 |
 | 掘金测试草稿清理（#12） | L | **非代码债**：平台侧数据，工程手段清理=过度工程 | 用户下次登录顺手删 |
+
+## 五、已清偿（2026-10-10）
+
+| 债项 | 清偿方式 | 对应产物 |
+|---|---|---|
+| #1 12 项修复未提交、无版本基线 | 0.6.1 分 4 笔 commit 重建回退基线（修复/测试/门禁/文档） | git `6bb43c9`…`926b113` |
+| #2 无一键回归门禁 | 新增 `scripts/check_all.{sh,ps1}` 四道：compileall → ruff → pytest → vite build；CI 同步补齐 ruff/pytest + 新增 frontend job | `scripts/check_all.ps1`、`scripts/check_all.sh`、`.github/workflows/ci.yml`、`backed/pyproject.toml [tool.ruff]` |
+| #9 data/ 单副本无备份 | 新增 `scripts/backup_data.py`：走 `sqlite3.Connection.backup()` 做在线一致性快照（不用停服务），备份后对副本跑 `PRAGMA integrity_check`；auth.json/config.json 权限收紧且拒绝落到仓库内 | `scripts/backup_data.py`、`backed/tests/test_backup_data.py` |
+| #6 requirements 全 `>=` 未锁版本 | 依赖管理已切 uv，`backed/uv.lock` 已随 0.6.1 重新解析并与 `pyproject.toml` 对齐（此前 lock 还停在 0.1.0 的依赖集合） | `backed/uv.lock` |
+| #7 构建产物入库且 hash 混杂 | `server/static/` 已入 .gitignore（部署时 build），仓库内无构建产物 | `.gitignore` |
+| #4 任务态存内存、重启丢状态 | 0.6.0 起任务状态落 `hub.db` 的 tasks 表，TaskManager 持久化 + 恢复 | `backed/service/publishing/tasks.py` |
+
+仍未清偿：#3（update/sync 切流引擎，即 T3/M5 主路径）、#5（共享驱动崩溃自愈，已列入"不建议现在还"）、
+#8（裸 except 151 处，按既定策略随触随改）、#10（双 lockfile）、#11（docs 目录结构）、#12（掘金草稿）。
 
 ## 四、权衡说明（对交付的影响）
 

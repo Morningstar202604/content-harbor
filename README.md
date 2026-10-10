@@ -199,7 +199,21 @@ pwsh -File scripts\check_all.ps1   # Windows
 bash scripts/check_all.sh          # Linux / macOS
 ```
 
-四道：语法编译 → ruff 静态门禁 → 143 个 pytest 用例 → 前端构建。任一步失败即停。
+四道：语法编译 → ruff 静态门禁 → 159 个 pytest 用例 → 前端构建。任一步失败即停。
+
+**备份数据（文章库 + 登录态）**：
+
+```bash
+cd backed
+uv run python ../scripts/backup_data.py                # 备份到 ~/harbor-backups
+uv run python ../scripts/backup_data.py --dry-run      # 只看计划不落盘
+uv run python ../scripts/backup_data.py --keep 14      # 保留 14 天
+uv run python ../scripts/backup_data.py --include-profiles   # 连浏览器 profile
+```
+
+备份目标刻意放在仓库外：`profiles/*.auth.json` 是 session cookie、`config.json`
+是明文 API Key，落进仓库就有被 commit 的风险，脚本会直接拒绝。
+用 `Connection.backup()` 做在线一致性快照，**不用停服务**。
 
 ---
 
