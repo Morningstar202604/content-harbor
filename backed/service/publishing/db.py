@@ -319,11 +319,14 @@ def get_publications(conn, article_id=None, platform=None, status=None):
     sql = "SELECT * FROM publications WHERE 1=1"
     args = []
     if article_id:
-        sql += " AND article_id=?"; args.append(article_id)
+        sql += " AND article_id=?"
+        args.append(article_id)
     if platform:
-        sql += " AND platform=?"; args.append(platform)
+        sql += " AND platform=?"
+        args.append(platform)
     if status:
-        sql += " AND status=?"; args.append(status)
+        sql += " AND status=?"
+        args.append(status)
     return conn.execute(sql + " ORDER BY updated_at DESC", args).fetchall()
 
 
@@ -374,7 +377,7 @@ def list_accounts(conn):
 
 def create_task(conn, task_id, kind, article_id=None, platforms=None,
                 account="default", draft_only=False):
-    cur = conn.execute(
+    conn.execute(
         """INSERT INTO tasks (task_id, kind, article_id, platforms, account,
            draft_only, status, created_at, updated_at)
            VALUES (?,?,?,?,?,?, 'pending', ?,?)""",

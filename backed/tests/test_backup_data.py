@@ -7,9 +7,7 @@ session cookie、config.json 是明文 API Key，都算敏感，只能落到仓�
 
 import importlib.util
 import json
-import os
 import sqlite3
-import threading
 import time
 from pathlib import Path
 

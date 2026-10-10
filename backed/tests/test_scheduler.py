@@ -12,9 +12,8 @@ import time
 
 import pytest
 
-from service.publishing import db, scheduler as sched_mod
-from service.publishing.scheduler import (Scheduler, _calc_next_run, _cron_next,
-                                          _cron_match)
+from service.publishing import db
+from service.publishing.scheduler import (Scheduler, _calc_next_run, _cron_match)
 
 
 class FakeTaskManager:

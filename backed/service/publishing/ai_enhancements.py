@@ -13,12 +13,9 @@
   seo_fields        生成 SEO 描述 / 关键词 / slug
 """
 
-import hashlib
 import json
-import os
 import re
 import time
-from pathlib import Path
 
 from service.publishing import ai as ai_mod
 

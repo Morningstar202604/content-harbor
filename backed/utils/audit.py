@@ -11,7 +11,6 @@ from dataclasses import dataclass, asdict
 from fastapi import Request
 
 from utils.logger import get_logger, setup_logger
-from config import settings
 
 logger = get_logger(__name__)
 

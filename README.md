@@ -26,7 +26,8 @@
 > **v0.4.0 重构**：后端已收敛到 `backed/`（FastAPI + SQLite + 统一任务引擎）。
 > 旧 scaffold（`core/database` / `core/cache` / `core/queue` / `models` / `schemas` / `repository` 等）已全部拆除，
 > 代码精简到 115 个文件，编译通过、沙箱内 10 个适配器全部实测运行通过。
-> 开发规范见 [`AGENT.md`](AGENT.md)，架构说明见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
+> 开发规范见 [`AGENT.md`](AGENT.md)，架构说明见 [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md)，
+> 存量审计报告见 [`docs/audit/AUDIT.md`](docs/audit/AUDIT.md)。
 
 ## 30 秒看懂它能干什么
 
@@ -199,7 +200,7 @@ pwsh -File scripts\check_all.ps1   # Windows
 bash scripts/check_all.sh          # Linux / macOS
 ```
 
-四道：语法编译 → ruff 静态门禁 → 159 个 pytest 用例 → 前端构建。任一步失败即停。
+四道：语法编译 → ruff 静态门禁 → 176 个 pytest 用例 → 前端构建。任一步失败即停。
 
 **备份数据（文章库 + 登录态）**：
 

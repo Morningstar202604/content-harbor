@@ -28,9 +28,7 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta
-from pathlib import Path
 
-from service.publishing import db
 
 
 # scheduled_tasks 表的 DDL（由 ensure_schema 建表，不走 MIGRATIONS 因为它不在 hub.db 里）
@@ -68,16 +66,19 @@ def _ensure_table(conn):
 
 
 def _calc_next_run(schedule_type: str, schedule_expr: str, base: float = None) -> float:
-    """根据调度类型 + 表达式，从 base（默认此刻）计算下一次执行的时间戳。
+    """根据调度类型 + 表达式，计算下一次执行的时间戳。
 
     支持的表达式：
       once    → "YYYY-MM-DD HH:MM" 或 "HH:MM"（今天或明天）
       daily   → "HH:MI"（每天此时）
       weekly  → "1-08:30"（周一 08:30；1=周一 ~ 7=周日）
       cron    → 标准 5 段 cron 表达式（分 时 日 月 周）
+
+    base 保留为公开签名的一部分（唯一调用方 _execute 传 base=now，语义即"以
+    执行时刻为基准"）。注意实现当前一律以 datetime.now() 为基准：base 不是
+    无效参数就是冗余，行为上等价，暂不改语义。
     """
     now = datetime.now()
-    base_dt = datetime.fromtimestamp(base) if base else now
 
     try:
         if schedule_type == "once":

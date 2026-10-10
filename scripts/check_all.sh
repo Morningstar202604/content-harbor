@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键回归门禁 —— 提交前必跑（tech-debt 台账 T2，AUDIT.md 的"可回退"承诺落地）
+# 一键回归门禁 —— 提交前必跑（tech-debt 台账 T2，docs/audit/AUDIT.md 的"可回退"承诺落地）
 #
 # 用法：bash scripts/check_all.sh
 # Windows 用户请用 scripts/check_all.ps1（同一套步骤，pwsh 版本）

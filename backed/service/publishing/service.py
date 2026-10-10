@@ -16,7 +16,7 @@ import hashlib
 
 from service.publishing import db
 from service.publishing.tasks import TaskManager
-from service.publishing.scheduler import Scheduler, init_scheduler
+from service.publishing.scheduler import init_scheduler
 from service.publishing.versions import capture as ver_capture, init_versions
 from service.publishing.adapters.base import PlatformError, get_adapter
 
@@ -28,7 +28,7 @@ def _content_hash(article):
         .encode("utf-8")).hexdigest()
 from service.publishing.browser import (BuiltinBrowser, ensure_login, CaptchaPolicy,
                           wait_human_captcha, browser_thread_run)
-from service.publishing.observability import TraceContext, METRICS, emit
+from service.publishing.observability import TraceContext
 from service.publishing import gate as aigc_gate
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -383,7 +383,6 @@ class Hub:
 
         这是给"登录时弹了验证码，想单独处理一下"准备的入口。
         """
-        from service.publishing.browser import CaptchaPolicy, wait_human_captcha
         ad = get_adapter(platform)
         if not ad.needs_browser:
             return {"ok": True, "msg": f"{platform} 走免登 API，不会有验证码"}
@@ -528,8 +527,6 @@ class Hub:
 
     def _demo_article(self, topic, style="", words=2000, tags_hint=""):
         """演示模式下的 AI 写稿：本地模板生成，不依赖 LLM。"""
-        import hashlib
-        seed = hashlib.md5(topic.encode("utf-8")).hexdigest()[:4]
         return {
             "title": topic,
             "summary": f"《{topic}》深度解读：从背景到实践，一文讲透（演示文章）。",

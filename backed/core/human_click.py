@@ -16,7 +16,6 @@ teleport 容器里，Playwright 的可行动性检查点不动它，JS 派发的
   - 不碰验证码：验证码一律人工 handoff（core/browser.py 的既有约定）
 """
 
-import math
 import random
 import time
 

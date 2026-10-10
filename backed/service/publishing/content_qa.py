@@ -9,10 +9,8 @@
 全部纯 heuristic，不调 AI，不联网。score 范围 0-100。
 """
 
-import math
 import re
 import hashlib
-from collections import Counter
 
 
 # ---------------- 可读性 ----------------

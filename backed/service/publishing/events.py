@@ -211,7 +211,7 @@ def _dispatch_async(evt):
                        (time.time(), wid))
             c2.commit()
             c2.close()
-        except Exception as e:
+        except Exception:   # aqg: top-level boundary（推送失败只记失败计数，不打断其余 webhook）
             new_fail = (fail_count or 0) + 1
             c2 = _conn()
             # 连续失败 5 次就自动禁用，避免一直刷

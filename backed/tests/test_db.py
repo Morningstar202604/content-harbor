@@ -4,7 +4,6 @@
 AGENT.md 铁律：SQL 只出现在 db.py。这一层是唯一真源，测它等于测地基。
 """
 
-import sqlite3
 import threading
 
 from service.publishing import db

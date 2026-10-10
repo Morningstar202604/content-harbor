@@ -9,7 +9,6 @@
   python config/manage.py list-environments
 """
 
-import os
 import sys
 import json
 from pathlib import Path
@@ -19,7 +18,7 @@ from typing import Dict, Any, Optional
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from config import ConfigFactory, ConfigManager, Environment
+from config import ConfigFactory, ConfigManager
 
 
 def validate_config(environment: Optional[str] = None) -> Dict[str, Any]:
@@ -89,13 +88,13 @@ def generate_env_template(environment: str) -> str:
         config = ConfigFactory.create_config(environment)
         
         template_lines = [
-            f"# =============================================================================",
+            "# =============================================================================",
             f"# {environment.upper()}环境配置模板",
-            f"# =============================================================================",
-            f"",
-            f"# 环境设置",
+            "# =============================================================================",
+            "",
+            "# 环境设置",
             f"FASTAPI_ENV={environment}",
-            f"",
+            "",
         ]
         
         # 获取配置字典
@@ -167,7 +166,7 @@ def main():
             for warning in result["warnings"]:
                 print(f"  - {warning}")
         
-        print(f"\n配置信息:")
+        print("\n配置信息:")
         for key, value in result.get("info", {}).items():
             print(f"  {key}: {value}")
     

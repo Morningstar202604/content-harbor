@@ -41,7 +41,6 @@ from service.publishing.adapters.base import (
     PlatformAdapter,
     PlatformError,
     content_evidence,
-    md_to_html,
     register,
     title_evidence,
 )

@@ -3,7 +3,7 @@
 
 [project]
 name = "ai-content-hub-backend"
-version = "0.6.3"
+version = "0.6.4"
 description = "AI 内容中台后端：基于 FastAPI 的文章库 / 多平台发布 / AIGC 合规门禁"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -51,13 +51,28 @@ filterwarnings = [
 
 [tool.ruff]
 # 回归门禁只查"真会出错"的规则：
-#   F82 未定义名 / 未绑定名   —— scheduler.py 的 row F821 就是这么漏上线的
+#   F82 未定义名 / 未绑定名   —— scheduler.py 的 row F821、service.py 的
+#                             wait_human_captcha 误删，都是这么漏上线的
 #   F7  assert/return/Continue 位置错、except 位置错等运行时错误
 #   E9  语法错误
-# 风格与卫生类（F401 死 import 23 处、E402 导入位置 9 处、F841 死变量…）
-# 属于存量技术债，全开会产出 58 条噪音，没人看输出等于没门禁，故暂不纳入。
+#
+# 已清理但**故意不纳入门禁**的：
+#   E402 导入位置 9 处 —— 全是有意为之：config/__init__.py 先定义 __all__ 再
+#        re-export；service.py 的跨模块 import 必须排在 ROOT 与哈希函数之后
+#        （:37 的"导入即注册"尤其不能动）。上移会破坏依赖顺序，属可读性提示
+#        而非 bug，改它只有坏处。
+#   E702 分号多语句 —— 已清零，但 ruff 不自动改（涉及语句拆分）。cnblogs_login
+#        的浏览器操作序列已人工拆行，保持顺序逐字不变。
+#
+# F401/F541/E401/F811/F841 已于 0.6.4 一次性清零并纳入 —— 那批里有真 bug
+# （ruff --fix 误删唯一引入点），不是纯风格债。
 line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E9", "F7", "F82"]
+# 卫生规则一并纳入（0.6.4 已清零并验证）：F401/F541/E401/E702/F811/F841
+# 这批里藏着真 bug，不是纯风格债。E402 故意排除，理由见上方注释。
+select = ["E4", "E7", "E9", "F"]
+ignore = [
+    "E402",   # 有意为之的后置 import，见上方注释
+]

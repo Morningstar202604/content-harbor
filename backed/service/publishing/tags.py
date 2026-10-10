@@ -15,7 +15,6 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from service.publishing import db
 
 
 TAGS_TABLE_DDL = """

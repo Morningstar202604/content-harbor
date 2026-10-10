@@ -37,19 +37,35 @@ content-harbor/
 │   │       ├── xiaohongshu.py  # 小红书
 │   │       ├── wechat.py       # 微信公众号
 │   │       ├── toutiao.py      # 头条号
-│   │       ├── bilibili.py     # B站
-│   │       ├── douyin.py       # 抖音
-│   │       ├── weibo.py        # 微博
-│   │       ├── juejin.py       # 掘金 (API)
-│   │       ├── sf.py           # SegmentFault (API)
+│   │       ├── juejin.py       # 掘金
+│   │       ├── csdn.py         # CSDN
+│   │       ├── zhihu.py        # 知乎
 │   │       ├── cnblogs.py      # 博客园 (XML-RPC)
-│   │       └── csdn.py         # CSDN
+│   │       ├── metaweblog.py   # 博客园元数据 (供 metaweblog 客户端用)
+│   │       ├── oschina.py      # 开源中国
+│   │       ├── segmentfault.py # SegmentFault
+│   │       ├── toutiao.py      # 头条号
+│   │       ├── bilibili.py     # B站专栏
+│   │       └── wuyi_cto.py     # 51CTO
 │   ├── config_unified.py       # 统一配置
 │   └── cli.py                  # 命令行入口
 ├── web/src/                    # Vue3 + Element Plus 前端
+├── scripts/
+│   ├── check_all.{sh,ps1}      # 一键回归门禁（compileall/ruff/pytest/vite）
+│   └── backup_data.py          # 数据备份（在线一致性快照）
+├── docs/
+│   ├── architecture/ARCHITECTURE.md   # 架构与 ADR
+│   ├── audit/AUDIT.md                 # 存量审计快照（2026-09-22 时点）
+│   ├── design/                        # M5 设计文档与技术债台账
+│   ├── writing-style.md               # AI 写作风格档案
+│   └── PLATFORM_PUBLISH_GUIDE.md      # 平台发布接入指南
 ├── deploy/                     # Docker 部署脚本
 └── pyproject.toml
 ```
+
+适配器注册是**导入副作用**：`adapters/__init__.py` 集中导入全部适配器模块，
+`@register` 装饰器在导入时把类登记进 `base.ADAPTERS`。新增平台只需在该
+`__init__.py` 加一行导入，不要依赖 `service.py` 的导入顺序。
 
 ## 2. 数据流
 
@@ -265,21 +281,23 @@ class ZhihuAdapter(PlatformAdapter):
     ...
 ```
 
-### 当前列表 (11 个)
+### 当前列表 (10 个)
 
-| 适配器 | 文件 | 认证方式 | needs_browser |
-|--------|------|---------|---------------|
-| zhihu | zhihu.py | browser | True |
-| xiaohongshu | xiaohongshu.py | browser | True |
-| wechat | wechat.py | browser | True |
-| toutiao | toutiao.py | browser | True |
-| bilibili | bilibili.py | browser | True |
-| douyin | douyin.py | browser | True |
-| weibo | weibo.py | browser | True |
-| juejin | juejin.py | api | False |
-| sf | sf.py | api | False |
-| cnblogs | cnblogs.py | xml-rpc | False |
-| csdn | csdn.py | browser/api | True |
+> 本表由 `tests/test_docs_links.py::test_agent_md_adapter_tree_matches_reality`
+> 与代码对照校验——改适配器而不同步本表，测试会红。
+
+| 适配器 | 文件 | needs_browser |
+|--------|------|---------------|
+| 51cto | wuyi_cto.py | False |
+| bilibili | bilibili.py | True |
+| cnblogs | cnblogs.py | False |
+| csdn | csdn.py | True |
+| juejin | juejin.py | True |
+| metaweblog | metaweblog.py | False |
+| oschina | oschina.py | True |
+| segmentfault | segmentfault.py | True |
+| toutiao | toutiao.py | True |
+| zhihu | zhihu.py | True |
 
 ### 新增适配器 Checklist
 
@@ -287,7 +305,7 @@ class ZhihuAdapter(PlatformAdapter):
 2. 继承 `PlatformAdapter` 实现 publish()
 3. 末尾 `@register` 装饰器
 4. 在 `config_unified.py` 中添加平台默认配置
-5. 更新 ARCHITECTURE.md 平台适配器表
+5. 更新 `docs/architecture/ARCHITECTURE.md` 平台适配器表
 
 ## 6. 开发命令
 
@@ -320,7 +338,7 @@ python -m backed.cli approve-task <id>   # 批准等待中任务
 
 ### 测试
 
-测试套件已就位（159 个用例，`backed/tests/`），提交前跑一键门禁：
+测试套件已就位（176 个用例，`backed/tests/`），提交前跑一键门禁：
 
 ```bash
 # Windows
@@ -361,7 +379,7 @@ uv run python ../scripts/backup_data.py --dry-run    # 只看计划
 
 - 信息英文，body 中文
 - Conventional Commits：`feat:` / `fix:` / `chore:` / `refactor:` / `docs:`
-- 与架构/数据模型相关改动需更新此文件与 ARCHITECTURE.md
+- 与架构/数据模型相关改动需更新此文件与 `docs/architecture/ARCHITECTURE.md`
 
 ## 8. 不要做的事
 

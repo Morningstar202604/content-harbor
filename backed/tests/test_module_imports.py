@@ -77,6 +77,24 @@ def test_mcp_server_imports():
         sys.path.remove(str(REPO_ROOT))
 
 
+def test_no_undefined_names_anywhere():
+    """F821 全仓零命中。
+
+    血泪教训：`ruff --fix` 删掉一条"看起来重复"的局部 import 后，
+    service.py:401 的 `wait_human_captcha` 变成未定义名——而那个符号
+    只在 solve_captcha 的浏览器分支里用到，测试全绿也照样上线炸。
+    ruff 的门禁规则集本来就含 F821，这条是把"门禁自己生效"也纳入回归。
+    """
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+    r = subprocess.run(
+        [_sys.executable, "-m", "ruff", "check", ".", "--select", "F821"],
+        cwd=str(_Path(__file__).resolve().parents[1]),
+        capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_adapter_registry_is_populated_by_package_import():
     """回归：注册表原先只在 service.py 被导入时才填，/platforms 会返回空。"""
     for mod in [m for m in sys.modules

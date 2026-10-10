@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.factory import create_app
-from service.publishing import db, events, tags
+from service.publishing import db, events
 from service.publishing.tasks import TaskManager
 
 

@@ -51,17 +51,27 @@
 | #2 无一键回归门禁 | 新增 `scripts/check_all.{sh,ps1}` 四道：compileall → ruff → pytest → vite build；CI 同步补齐 ruff/pytest + 新增 frontend job | `scripts/check_all.ps1`、`scripts/check_all.sh`、`.github/workflows/ci.yml`、`backed/pyproject.toml [tool.ruff]` |
 | #9 data/ 单副本无备份 | 新增 `scripts/backup_data.py`：走 `sqlite3.Connection.backup()` 做在线一致性快照（不用停服务），备份后对副本跑 `PRAGMA integrity_check`；auth.json/config.json 权限收紧且拒绝落到仓库内 | `scripts/backup_data.py`、`backed/tests/test_backup_data.py` |
 | #10 双 lockfile 并存 | 删 `web/package-lock.json`，`web/pnpm-lock.yaml` 成为唯一 lockfile（README/README.en/ci.yml/check_all 四处早已一律走 pnpm，全仓库零 npm 调用） | `web/pnpm-lock.yaml` |
+| #8 裸 except / 死代码 | ruff 全量规则（`E4/E7/E9/F`）清零并**纳入门禁**；期间 `ruff --fix` 误删 `service.py` 的 `wait_human_captcha` 唯一引入点，已修并加 F821 零命中断言 | `backed/pyproject.toml`、`backed/tests/test_module_imports.py` |
+| #11 docs 未成型 | `ARCHITECTURE.md` → `docs/architecture/`、`AUDIT.md` → `docs/audit/`（git rename 保历史）；新增 `test_docs_links.py` 守护链接可达性与适配器清单一致性 | `docs/architecture/ARCHITECTURE.md`、`docs/audit/AUDIT.md`、`backed/tests/test_docs_links.py` |
+
+### 已失效（台账描述与代码不符，非"已还债"）
+
+| 债项 | 台账描述 | 核实结果 |
+|---|---|---|
+| **#3** update/sync 走 legacy、切流未完成 | 待还，1.5–2.5d，动主路径 | **早已完成**：`update_single`（`service.py:876`，注释写明"R3 门禁：行为逐字不变"）已抽出；`tasks._dispatch` 已处理 `update`/`sync`；`api/hub.py:263-276` 三套入口（legacy/async/workflow）已合一无回退分支。台账写于 2026-09-22 基线，0.4.0 大清理时完成，台账未同步 |
+| #5 共享驱动崩溃自愈 | M 级待还 | 维持不还，其自定触发条件（首次真实崩溃 / 上无人值守环境）均未发生 |
 | #6 requirements 全 `>=` 未锁版本 | 依赖管理已切 uv，`backed/uv.lock` 已随 0.6.1 重新解析并与 `pyproject.toml` 对齐（此前 lock 还停在 0.1.0 的依赖集合） | `backed/uv.lock` |
 | #7 构建产物入库且 hash 混杂 | `server/static/` 已入 .gitignore（部署时 build），仓库内无构建产物 | `.gitignore` |
 | #4 任务态存内存、重启丢状态 | 0.6.0 起任务状态落 `hub.db` 的 tasks 表，TaskManager 持久化 + 恢复 | `backed/service/publishing/tasks.py` |
 
-仍未清偿：#3（update/sync 切流引擎，即 T3/M5 主路径）、#5（共享驱动崩溃自愈，已列入"不建议现在还"）、
-#8（裸 except 151 处，按既定策略随触随改）、#11（docs 目录结构）、#12（掘金草稿）。
+仍未清偿：仅 **#12**（掘金后台 2–3 个测试草稿，非工程债，平台侧手动删）。
+#3 与 #5 见上节「已失效」。另：`docs/design/m5-*.md` 描述的 M5 workflow 引擎方案
+已被统一任务引擎（`tasks.py`）取代，那几份设计文档可归档或重写，不再是实施指引。
 
-**暂不还 #11 的理由**：移动 `ARCHITECTURE.md` / `AUDIT.md` 到 `docs/` 会牵动 7 处引用，其中
-`CHANGELOG.md:159,177` 是历史条目——改历史则失真，不改则链接失效。根目录保留
-`AGENT.md` + `README.md` + `CHANGELOG.md` 作为入口已可导航，待 docs/ 目录本身有
-足够内容时再做，值得单独排。
+**关于 #11 的先前后续**：0.6.3 曾以"移动会让 `CHANGELOG.md:159,177` 的历史条目
+指向失效路径"为由跳过 0.6.4 那一轮——该理由经核实不成立：全仓库只有 1 处 markdown
+链接指向这两个文件（README.md），CHANGELOG 与本文件里的提及都是纯文本叙述而非链接。
+0.6.4 已完成迁移，并用 `test_docs_links.py` 把"链接可达"变成机器判定。
 
 ## 四、权衡说明（对交付的影响）
 

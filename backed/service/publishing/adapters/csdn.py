@@ -143,7 +143,8 @@ class CSDNAdapter(PlatformAdapter):
         点击"导入"按钮后文件对话框弹出，Playwright 直接 set_input_files 注入。
         返回 True 成功，False 失败（调用方降级到 typing）。
         """
-        import tempfile, os
+        import tempfile
+        import os
         tmp = None
         try:
             # 体检 B18 修复（QA 标质力 2026-09-21）：临时文件写项目 data 目录的

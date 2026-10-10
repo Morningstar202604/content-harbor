@@ -7,7 +7,7 @@
 
 from typing import Optional
 
-from fastapi import Depends, Header
+from fastapi import Header
 
 from config import settings
 from utils.custom_exceptions import AuthenticationException

@@ -124,7 +124,6 @@ def slide_to(page, distance, y_offset=0, steps=None, overshoot=True):
         t = i / steps
         # ease-out：越接近越慢
         target = distance * (1 - (1 - t) ** 2.2)
-        dx = target - travelled
         travelled = target
         page.mouse.move(start_x + travelled,
                         start_y + random.uniform(-1.2, 1.2))

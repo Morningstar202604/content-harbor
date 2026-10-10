@@ -144,9 +144,13 @@ def login_browser(br, username, password, on_captcha="handoff", timeout=600):
             return out
 
         # 填凭据
-        u.click(); page.keyboard.press("Control+a"); page.keyboard.press("Delete")
+        u.click()
+        page.keyboard.press("Control+a")
+        page.keyboard.press("Delete")
         page.keyboard.type(username, delay=45)
-        p.click(); page.keyboard.press("Control+a"); page.keyboard.press("Delete")
+        p.click()
+        page.keyboard.press("Control+a")
+        page.keyboard.press("Delete")
         page.keyboard.type(password, delay=45)
         out["typed"] = {"username": u.input_value(), "password": "***"}
         time.sleep(0.4)
@@ -227,7 +231,9 @@ def extract_metaweblog(page, save_to=None, login_username=None):
         for loc in page.locator("a,button,[role=tab]").all():
             try:
                 if loc.is_visible() and "其他" in (loc.inner_text() or ""):
-                    loc.click(); time.sleep(1.5); break
+                    loc.click()
+                    time.sleep(1.5)
+                    break
             except Exception:
                 continue
     except Exception:
@@ -277,7 +283,8 @@ def extract_metaweblog(page, save_to=None, login_username=None):
                         }""", loc.element_handle())
                     if box and label and ("MetaWeblog" in label or "客户端" in label):
                         if not loc.is_checked():
-                            loc.click(); time.sleep(2)
+                            loc.click()
+                            time.sleep(2)
                         break
                 except Exception:
                     continue

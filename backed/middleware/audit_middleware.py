@@ -14,7 +14,7 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
-from utils.audit import audit_logger, AuditAction, AuditLevel
+from utils.audit import audit_logger, AuditAction
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -195,14 +195,6 @@ class AuditMiddleware(BaseHTTPMiddleware):
                     'type': type(error).__name__,
                     'message': str(error)
                 }
-
-            # 确定审计级别
-            if not success:
-                level = AuditLevel.ERROR
-            elif response and response.status_code >= 400:
-                level = AuditLevel.WARNING
-            else:
-                level = AuditLevel.INFO
 
             # 提取用户信息（如果可用）
             user_id = None

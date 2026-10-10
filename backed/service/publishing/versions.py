@@ -9,9 +9,7 @@ AI 改写 / 润色前也各自 capture 一份——人审闸门的第一道：�
 """
 
 import hashlib
-import json
 import time
-from pathlib import Path
 
 from service.publishing import db
 

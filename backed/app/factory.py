@@ -15,7 +15,7 @@ from .config import AppConfig
 from .middleware import setup_middleware
 from .exceptions import setup_exception_handlers
 from .routes import setup_routes
-from api.hub import register_hub, hub_router
+from api.hub import register_hub
 
 logger = get_logger(__name__)
 

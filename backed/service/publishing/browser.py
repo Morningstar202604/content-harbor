@@ -737,11 +737,11 @@ def wait_human_captcha(page, platform, timeout=300, poll=2, try_auto=True):
     print(f"\n{'=' * 62}")
     print(f"  【需要人工】{platform} 弹了验证码（类型：{kind}）")
     print(f"  现场截图：{files['screenshot']}")
-    print(f"  浏览器窗口已经开着，请在里面手动完成验证（点/拖/选）。")
+    print("  浏览器窗口已经开着，请在里面手动完成验证（点/拖/选）。")
     print(f"  过完这里会自动继续，最长等 {timeout} 秒。")
     if CaptchaPolicy.API_FIRST.get(platform):
         print(f"  小提示：{platform} 其实可以走 {CaptchaPolicy.API_FIRST[platform]}，")
-        print(f"          走那条路压根不会有验证码，有空可以考虑。")
+        print("          走那条路压根不会有验证码，有空可以考虑。")
     print(f"{'=' * 62}\n")
 
     deadline = time.time() + timeout
