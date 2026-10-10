@@ -44,7 +44,7 @@ class BaseConfig(BaseSettings):
     project_name: str = "ai-content-hub-backend"
     project_version: str = "0.6.5"
     api_version: str = "v1"
-    api_prefix: str = "/api/v1"
+    api_prefix: str = "/api/v1/hub"
     
     # =================================================================
     # 数据库基础配置

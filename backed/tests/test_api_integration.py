@@ -72,9 +72,8 @@ class StubHub:
 def client(sandbox):
     hub = StubHub(db.connect(sandbox["db_file"]))
 
-    import api.hub as hub_api
-    hub_api._hub_instance = hub
-    hub_api._task_manager = hub.tasks
+    import api.deps as hub_deps
+    hub_deps._hub_instance = hub
 
     with TestClient(create_app()) as c:
         yield c
@@ -84,45 +83,45 @@ def client(sandbox):
 
 
 def test_articles_crud_roundtrip(client):
-    r = client.post("/api/hub/articles", json={"title": "第一稿", "content_md": "v1"})
+    r = client.post("/api/v1/hub/articles", json={"title": "第一稿", "content_md": "v1"})
     assert r.status_code == 200
     aid = r.json()["id"]
     assert aid > 0
 
-    assert client.get(f"/api/hub/articles/{aid}").json()["title"] == "第一稿"
+    assert client.get(f"/api/v1/hub/articles/{aid}").json()["title"] == "第一稿"
 
-    assert client.put(f"/api/hub/articles/{aid}",
+    assert client.put(f"/api/v1/hub/articles/{aid}",
                       json={"title": "改过的标题"}).json()["ok"] is True
-    assert client.get(f"/api/hub/articles/{aid}").json()["title"] == "改过的标题"
+    assert client.get(f"/api/v1/hub/articles/{aid}").json()["title"] == "改过的标题"
 
-    rows = client.get("/api/hub/articles").json()
+    rows = client.get("/api/v1/hub/articles").json()
     assert [x["id"] for x in rows] == [aid]
 
-    assert client.get("/api/hub/articles/search/标题").json()[0]["id"] == aid
-    assert client.get("/api/hub/articles/999").status_code == 404
+    assert client.get("/api/v1/hub/articles/search/标题").json()[0]["id"] == aid
+    assert client.get("/api/v1/hub/articles/999").status_code == 404
 
 
 def test_edit_marks_publication_pending(client):
-    aid = client.post("/api/hub/articles", json={"title": "T"}).json()["id"]
+    aid = client.post("/api/v1/hub/articles", json={"title": "T"}).json()["id"]
     hub = _hub()
     db.upsert_publication(hub.conn, aid, "juejin", status="ok", post_id="p1")
 
-    client.put(f"/api/hub/articles/{aid}", json={"content_md": "v2"})
-    pubs = client.get("/api/hub/publications", params={"platform": "juejin"}).json()
+    client.put(f"/api/v1/hub/articles/{aid}", json={"content_md": "v2"})
+    pubs = client.get("/api/v1/hub/publications", params={"platform": "juejin"}).json()
     assert pubs[0]["status"] == "pending"
     assert pubs[0]["title"] == "T"
 
 
 def _hub():
-    import api.hub as hub_api
-    return hub_api._hub_instance
+    import api.deps as hub_deps
+    return hub_deps._hub_instance
 
 
 def _wait_task(client, tid):
     """轮询任务直到终态，返回终态任务体。容忍短暂 404（submit 在途）。"""
     import time
     for _ in range(200):
-        got = client.get(f"/api/hub/tasks/{tid}")
+        got = client.get(f"/api/v1/hub/tasks/{tid}")
         body = got.json()
         if got.status_code == 200 and body["status"] in ("ok", "failed", "waiting_human"):
             return body
@@ -132,88 +131,88 @@ def _wait_task(client, tid):
 
 def test_tasks_lifecycle_over_rest(client, monkeypatch):
     monkeypatch.setattr(StubHub, "publish", lambda self, *a, **kw: ["ok"])
-    aid = client.post("/api/hub/articles", json={"title": "T"}).json()["id"]
-    r = client.post(f"/api/hub/articles/{aid}/publish",
+    aid = client.post("/api/v1/hub/articles", json={"title": "T"}).json()["id"]
+    r = client.post(f"/api/v1/hub/articles/{aid}/publish",
                     json={"platforms": ["juejin"]})
     assert r.status_code == 200
     tid = r.json()["task_id"]
     assert r.json()["poll"] == f"/tasks/{tid}"
 
     assert _wait_task(client, tid)["status"] == "ok"
-    assert client.get("/api/hub/tasks/doesnotexist").status_code == 404
-    assert any(t["task_id"] == tid for t in client.get("/api/hub/tasks").json())
+    assert client.get("/api/v1/hub/tasks/doesnotexist").status_code == 404
+    assert any(t["task_id"] == tid for t in client.get("/api/v1/hub/tasks").json())
 
 
 def test_webhooks_rest_crud(client):
-    created = client.post("/api/hub/webhooks",
+    created = client.post("/api/v1/hub/webhooks",
                           json={"url": "https://example.com/hook",
                                 "events": ["task.ok"], "secret": "s3cret"})
     assert created.status_code == 200
     wid = created.json()["id"]
     assert wid > 0
 
-    listed = client.get("/api/hub/webhooks").json()
+    listed = client.get("/api/v1/hub/webhooks").json()
     row = [h for h in listed if h["id"] == wid][0]
     assert row["events"] == ["task.ok"]
     assert row["has_secret"] is True
 
-    assert client.put(f"/api/hub/webhooks/{wid}",
+    assert client.put(f"/api/v1/hub/webhooks/{wid}",
                       json={"url": "https://other"}).json()["ok"] is True
-    assert client.put("/api/hub/webhooks/9999",
+    assert client.put("/api/v1/hub/webhooks/9999",
                       json={"url": "https://x"}).status_code == 404
 
-    assert client.delete(f"/api/hub/webhooks/{wid}").json()["ok"] is True
-    assert client.delete(f"/api/hub/webhooks/{wid}").status_code == 404
+    assert client.delete(f"/api/v1/hub/webhooks/{wid}").json()["ok"] is True
+    assert client.delete(f"/api/v1/hub/webhooks/{wid}").status_code == 404
 
 
 def test_tags_rest_gateway(client):
-    aid = client.post("/api/hub/articles", json={"title": "T", "tags": "python"}).json()["id"]
+    aid = client.post("/api/v1/hub/articles", json={"title": "T", "tags": "python"}).json()["id"]
     assert aid
-    assert client.post("/api/hub/tags/sync").json()["synced"] == 1
-    assert client.get("/api/hub/tags").json()[0]["tag"] == "Python"
-    assert client.get("/api/hub/tags/trending").json()[0]["count"] == 1
+    assert client.post("/api/v1/hub/tags/sync").json()["synced"] == 1
+    assert client.get("/api/v1/hub/tags").json()[0]["tag"] == "Python"
+    assert client.get("/api/v1/hub/tags/trending").json()[0]["count"] == 1
 
 
 def test_notifications_and_gate_and_metrics(client):
     events.emit("task.ok", {"task_id": "rest"})
-    got = client.get("/api/hub/notifications").json()
+    got = client.get("/api/v1/hub/notifications").json()
     assert any(n["data"].get("task_id") == "rest" for n in got)
 
-    gate = client.get("/api/hub/ai/gate").json()
+    gate = client.get("/api/v1/hub/ai/gate").json()
     assert "enabled" in gate and "recent_denied" in gate
 
-    snap = client.get("/api/hub/metrics").json()
+    snap = client.get("/api/v1/hub/metrics").json()
     assert "hits" in snap or "counters" in snap
 
 
 def test_pending_human_endpoint(client):
     hub = _hub()
-    aid = client.post("/api/hub/articles", json={"title": "待人工"}).json()["id"]
+    aid = client.post("/api/v1/hub/articles", json={"title": "待人工"}).json()["id"]
     db.upsert_publication(hub.conn, aid, "juejin", status="pending_human")
-    rows = client.get("/api/hub/pending-human").json()
+    rows = client.get("/api/v1/hub/pending-human").json()
     assert [r["platform"] for r in rows] == ["juejin"]
     assert rows[0]["title"] == "待人工"
 
 
 def test_platforms_endpoint_lists_adapters(client):
-    got = client.get("/api/hub/platforms").json()
+    got = client.get("/api/v1/hub/platforms").json()
     ids = {p["id"] for p in got}
     assert "juejin" in ids and "csdn" in ids
     assert all("needs_browser" in p for p in got)
 
 
 def test_accounts_endpoint(client):
-    assert client.get("/api/hub/accounts").json() == []
+    assert client.get("/api/v1/hub/accounts").json() == []
     _hub().conn.execute(
         "INSERT INTO accounts (platform, name, profile_dir, status) "
         "VALUES ('juejin','default','/tmp/p','logined')")
     _hub().conn.commit()
-    rows = client.get("/api/hub/accounts").json()
+    rows = client.get("/api/v1/hub/accounts").json()
     assert rows[0]["platform"] == "juejin"
 
 
 def test_jobs_endpoint(client):
     hub = _hub()
     db.add_job(hub.conn, "publish", article_id=1)
-    rows = client.get("/api/hub/jobs").json()
+    rows = client.get("/api/v1/hub/jobs").json()
     assert rows[0]["type"] == "publish"

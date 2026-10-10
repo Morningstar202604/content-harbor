@@ -8,7 +8,6 @@ import atexit
 import json
 import os
 import random
-import threading
 import time
 from pathlib import Path
 
@@ -29,8 +28,8 @@ def _content_hash(article):
     return hashlib.sha256(
         f"{article['title']}\n{article['content_md']}\n{article.get('summary') or ''}"
         .encode("utf-8")).hexdigest()
-from service.publishing.browser import (BuiltinBrowser, ensure_login, CaptchaPolicy,
-                          wait_human_captcha, browser_thread_run)
+from service.publishing.browser import (BuiltinBrowser, CaptchaPolicy,
+                          browser_thread_run)
 from service.publishing.observability import TraceContext
 from service.publishing import gate as aigc_gate
 
@@ -110,44 +109,11 @@ class Hub:
 
     def login(self, platform, account="default", timeout=600, on_captcha=None):
         """扫码/过验证登录一次，登录态存进本地 profile，之后长期有效。"""
-        if self.demo:
-            db.upsert_account(self.conn, platform, account, "-", "logined")
-            return True, "演示模式：模拟登录成功"
-        ad = get_adapter(platform)
-        # 纯协议平台不用开浏览器，直接验凭据
-        if not ad.needs_browser:
-            try:
-                ok = ad.check_auth(None)
-                db.upsert_account(self.conn, platform, account, "-",
-                                  "logined" if ok else "offline")
-                return ok, ("凭据有效（免登录 API）" if ok else "凭据无效，检查 config.json")
-            except PlatformError as e:
-                db.upsert_account(self.conn, platform, account, "-", "offline")
-                return False, str(e)
-
-        # profile 目录是独占的：先释放池里可能占着它的实例，不然有头浏览器起不来。
-        # B3：整个登录过程持 per-key 互斥，防止与池实例/另一路登录争同一 profile
-        with self._busy_for(platform, account):
-            self._drop(platform, account)
-
-            def _op():
-                br = BuiltinBrowser(platform, account, headless=False)  # 登录必须有头
-                try:
-                    ok, msg = ensure_login(br, ad.login_url, ad.check_auth, timeout=timeout,
-                                           on_captcha=on_captcha or self.on_captcha)
-                    if ok:
-                        # 登录态快照：Python 同步写盘（2026-09-22 掘金扫码成功但
-                        # chromium 关窗前没刷 cookie、状态丢失的修复）
-                        try:
-                            br.export_auth()
-                        except Exception:
-                            pass
-                    db.upsert_account(self.conn, platform, account,
-                                      str(br.profile_dir), "logined" if ok else "offline")
-                    return ok, msg
-                finally:
-                    br.close()
-            return browser_thread_run(_op)
+        from service.publishing._account_ops import login as _do_login
+        return _do_login(platform, account, timeout,
+                         on_captcha or self.on_captcha,
+                         self._browser_pool, self._drop,
+                         self._busy_for, self.conn, self.demo)
 
     def _check_auth_settled(self, ad, page, settle=2.0, tries=2):
         """登录态检查（带沉降重试）。
@@ -226,31 +192,9 @@ class Hub:
             return browser_thread_run(_op)
 
     def logout(self, platform, account="default"):
-        """清除某个平台的登录态：删 profile 目录 + auth 快照，账号状态置离线。
-
-        登录态管理闭环：login(存) → check(验) → logout(清)。不清的话
-        profile 目录会一直在磁盘上（cookie 也会过期，但留着占地方、易混淆）。
-        """
-        from service.publishing.browser import PROFILE_ROOT
-        import shutil
-        # 先把池里可能占着 profile 的实例释放掉，否则删不掉
-        self._drop(platform, account)
-        removed = []
-        profile_dir = PROFILE_ROOT / f"{platform}_{account}"
-        auth_file = PROFILE_ROOT / f"{platform}_{account}.auth.json"
-        if profile_dir.exists():
-            shutil.rmtree(profile_dir, ignore_errors=True)
-            removed.append(str(profile_dir))
-        if auth_file.exists():
-            auth_file.unlink(missing_ok=True)
-            removed.append(str(auth_file))
-        # 数据库状态置离线
-        self.conn.execute(
-            "UPDATE accounts SET status='offline', last_check=? WHERE platform=? AND name=?",
-            (time.time(), platform, account))
-        self.conn.commit()
-        return {"platform": platform, "removed": removed,
-                "note": "登录态已清除，下次登录需重新扫码"}
+        """清除某个平台的登录态：删 profile 目录 + auth 快照，账号状态置离线。"""
+        from service.publishing._account_ops import logout as _do_logout
+        return _do_logout(platform, account, self._browser_pool, self._drop, self.conn)
 
     def diagnose(self, platform):
         """排查端点：这平台到底该怎么接入、验证码怎么过，一目了然。"""
@@ -273,34 +217,11 @@ class Hub:
         return info
 
     def assist_open(self, platform, url, timeout=900, account="default"):
-        """带登录态的有头浏览器打开平台页——把"去平台互动"接进本机。
-
-        演示模式：直接返回成功，不真开浏览器。
-        用我们的 profile（已登录），用户在弹出窗口里完成平台侧最后一步
-        （如掘金「确定并发布」），关窗即结束。登录态四层保障全程继承。"""
-        if self.demo:
-            return {"ok": True, "msg": "演示模式：模拟打开平台页（带登录态）"}
-        with self._busy_for(platform, account):
-            self._drop(platform, account)
-
-            def _op():
-                br = BuiltinBrowser(platform, account, headless=False)
-                closed = threading.Event()
-                try:
-                    ctx = br.start()
-                    page = ctx.new_page()
-                    page.on('close', lambda _: closed.set())
-                    page.goto(url, timeout=60000, wait_until='domcontentloaded')
-                    closed.wait(timeout=timeout)
-                    msg = ('平台页已关闭——如已完成操作，回管理页点「已处理，恢复」'
-                           if closed.is_set() else f'assist 超时({timeout}s)自动关闭')
-                    return {'ok': True, 'msg': msg}
-                finally:
-                    try:
-                        br.close()
-                    except Exception:   # aqg: top-level boundary（关窗兜底，assist 任务收尾）
-                        pass
-            return browser_thread_run(_op)
+        """带登录态的有头浏览器打开平台页——把"去平台互动"接进本机。"""
+        from service.publishing._account_ops import assist_open as _do_assist
+        return _do_assist(platform, account, url, timeout,
+                          self._browser_pool, self._drop, self._busy_for,
+                          self.demo, self.conn)
 
     def bootstrap_cnblogs(self, username, password, account="default",
                           timeout=600, on_captcha="handoff"):
@@ -309,7 +230,6 @@ class Hub:
         这是取代「让用户手贴令牌」的正确路径：账号+密码登一次，登录态存盘，
         设置页里把 endpoint/username/token 自动抠出来，之后发布走纯协议。
         """
-        from service.publishing.browser import BuiltinBrowser
         from service.publishing.cnblogs_login import login_browser, extract_metaweblog
         from service.publishing.browser import ensure_display
 
@@ -339,30 +259,10 @@ class Hub:
         return browser_thread_run(_op)
 
     def solve_captcha(self, platform, account="default", wait=180):
-        """打开平台页面，如果弹验证码就地处理：先半自动，不行转人工。
-
-        这是给"登录时弹了验证码，想单独处理一下"准备的入口。
-        """
-        ad = get_adapter(platform)
-        if not ad.needs_browser:
-            return {"ok": True, "msg": f"{platform} 走免登 API，不会有验证码"}
-        self._drop(platform, account)   # profile 独占，先释放池里的实例
-
-        def _op():
-            br = BuiltinBrowser(platform, account, headless=False)
-            try:
-                page = br.new_page()
-                page.goto(ad.login_url, timeout=60000, wait_until="domcontentloaded")
-                import time as _t
-                _t.sleep(3)
-                kind = CaptchaPolicy.detect(page)
-                if not kind:
-                    return {"ok": True, "msg": "当前页面没有验证码"}
-                ok, info = wait_human_captcha(page, platform, timeout=wait)
-                return {"ok": ok, "kind": kind, **info}
-            finally:
-                br.close()
-        return browser_thread_run(_op)
+        """打开平台页面，如果弹验证码就地处理：先半自动，不行转人工。"""
+        from service.publishing._account_ops import solve_captcha as _do_solve
+        return _do_solve(platform, account, wait, self._browser_pool,
+                         self._drop, self._busy_for, self.conn)
 
     def accounts(self):
         return [dict(r) for r in db.list_accounts(self.conn)]

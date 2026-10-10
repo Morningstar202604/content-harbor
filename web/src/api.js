@@ -1,18 +1,18 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
-// hub_router 挂载在 /api/hub (api/hub.py:819)，前后端路径必须对齐。
+// hub_router 挂载在 /api/v1/hub (api/hub.py L56)，前后端路径必须对齐。
 // 桌面模式：读 window.__TAURI_PORT__（等 sidecar 注入后动态获取）
-// Web 模式：与后端同域，直接用 /api/hub
+// Web 模式：与后端同域，直接用 /api/v1/hub
 function getBaseURL() {
   if (window.__TAURI_PORT__) {
-    return `http://127.0.0.1:${window.__TAURI_PORT__}/api/hub`
+    return `http://127.0.0.1:${window.__TAURI_PORT__}/api/v1/hub`
   }
-  return '/api/hub'
+  return '/api/v1/hub'
 }
 
 const http = axios.create({
-  baseURL: '/api/hub',
+  baseURL: '/api/v1/hub',
   timeout: 120000   // 发布/更新要开浏览器，慢是正常的
 })
 

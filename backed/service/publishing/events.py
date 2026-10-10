@@ -1,37 +1,30 @@
 # -*- coding: utf-8 -*-
-"""事件系统：任务结果 webhook 推送 + 站内通知 + SSE 实时流。
+"""事件系统总入口：聚合通知缓冲 / SSE 实时流 / Webhook 派发。
 
-解决什么问题：
-  - 发布/更新任务完成后，外部系统无法实时感知（原来只能轮询任务接口）
-  - 没有通知中心，前端只靠 2 秒一次的 polling 感知新事件
-  - 改成 SSE 后前端实时收到任务状态变更，不再需要暴力轮询
+子模块拆分：
+  - ``_event_notifier`` : 站内通知环形缓冲（内存，最近 200 条）
+  - ``_sse_broker``     : SSE 订阅/广播（多客户端长连接管理）
+  - ``_webhook_store``  : Webhook 存储 + HMAC 签名 + 异步派发
 
-架构：
-  - webhooks 表：注册需要推送的事件类型 + URL + secret（Fernet 加密落库）
-  - 事件触发：TaskManager / Hub 在关键节点 emit() 同步 → 异步派发线程 POST 到 webhook
-  - 站内通知：内存环形缓冲（最近 200 条），前端 GET /events 拉取
-  - SSE 实时流：前端 GET /events/stream 建立长连接，服务端推送新事件
+本模块保持向后兼容的导出：``emit()`` / ``init_events()`` /
+``get_notifications()`` / ``subscribe_sse()`` / ``unsubscribe_sse()`` /
+``on_task_complete()`` 等。
 """
 
-import hashlib
-import hmac
 import json
-import queue
 import threading
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from collections import deque
-from pathlib import Path
 
-import sqlite3 as _sql
+# 子模块
+from . import _event_notifier as _notifier
+from . import _sse_broker as _sse
+from . import _webhook_store as _wh
 
-from service.publishing import crypto
+# ---------------- 事件类型 → 说明 -----------------
 
-ROOT = Path(__file__).resolve().parent.parent
-_DB_PATH = ROOT / "data" / "hub.db"
-
-# 事件类型 → 说明
 EVENT_TYPES = {
     "task.ok": "任务完成",
     "task.failed": "任务失败",
@@ -44,197 +37,82 @@ EVENT_TYPES = {
     "account.logout": "登出",
     "ai.write": "AI 写稿完成",
     "ai.rewrite": "AI 改写完成",
+    "api.access": "API 调用",
+    "test": "测试事件",
 }
 
-# 站内通知环形缓冲（跨线程安全）
-_notifications = deque(maxlen=200)
-_notifications_lock = threading.Lock()
+# ---------------- 对外接口 -----------------
 
-# SSE 客户端队列（每个连接一个 Queue）
-_sse_clients: set[queue.Queue] = set()
-_sse_lock = threading.Lock()
-
-# 异步派发队列
 _dispatch_q = deque()
 _dispatch_cv = threading.Condition()
 _dispatcher_running = False
 
 
-# ---------------- Webhook 存储 ----------------
-
-def _conn():
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    c = _sql.connect(str(_DB_PATH), timeout=30)
-    c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA busy_timeout=5000")
-    return c
-
-
 def init_events(conn=None):
-    """建 webhooks 表（如果还没有）。"""
-    c = conn or _conn()
-    c.execute("""CREATE TABLE IF NOT EXISTS webhooks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        url TEXT NOT NULL,
-        secret TEXT DEFAULT '',
-        events TEXT DEFAULT '*',        -- JSON 数组，["*"] 表示全订阅
-        enabled INTEGER DEFAULT 1,
-        created_at REAL DEFAULT (strftime('%s','now')),
-        last_triggered REAL DEFAULT 0,
-        fail_count INTEGER DEFAULT 0
-    )""")
-    c.commit()
+    """初始化事件系统（建 webhook 表 + 启动异步派发线程）。"""
+    _wh.init(conn)
 
+
+def get_notifications(since=None, limit=50):
+    """查询站内通知。"""
+    return _notifier.get_since(since=since, limit=limit)
+
+
+def subscribe_sse():
+    """注册一个 SSE 客户端。返回 Queue。"""
+    return _sse.subscribe()
+
+
+def unsubscribe_sse(q):
+    """注销 SSE 客户端。"""
+    _sse.unsubscribe(q)
+
+
+def emit(event_type, data=None):
+    """发射一个事件：写通知缓冲 + SSE 广播 + 异步 webhook 派发。"""
+    evt = {"type": event_type, "data": data or {}, "timestamp": time.time()}
+    _notifier.append(evt)
+    _sse.broadcast(evt)
+    _enqueue_webhook(evt)
+    return evt
+
+
+# ---------------- Webhook CRUD（代理） -----------------
 
 def register_webhook(url, events=None, secret="", enabled=True):
-    """注册一个 webhook。secret 加密落库。返回 webhook id。"""
-    init_events()
-    c = _conn()
-    # 加密敏感字段
-    encrypted_secret = crypto.encrypt(secret) if secret else ""
-    events_json = json.dumps(events or ["*"], ensure_ascii=False)
-    cur = c.execute(
-        "INSERT INTO webhooks (url, secret, events, enabled) VALUES (?, ?, ?, ?)",
-        (url, encrypted_secret, events_json, 1 if enabled else 0))
-    c.commit()
-    wid = cur.lastrowid
-    c.close()
-    return wid
+    """注册 webhook。"""
+    return _wh.register(url, events, secret, enabled)
 
 
 def list_webhooks():
-    init_events()
-    c = _conn()
-    rows = c.execute(
-        "SELECT id, url, secret, events, enabled, created_at, last_triggered, fail_count "
-        "FROM webhooks ORDER BY id").fetchall()
-    c.close()
-    result = []
-    for r in rows:
-        evts = json.loads(r[3]) if r[3] else ["*"]
-        # 解密 secret（仅在有值时判断是否有 secret，不返回实际值）
-        plain_secret = crypto.decrypt(r[2]) if r[2] else ""
-        result.append({
-            "id": r[0], "url": r[1], "has_secret": bool(plain_secret),
-            "events": evts, "enabled": bool(r[4]),
-            "created_at": r[5], "last_triggered": r[6] or 0,
-            "fail_count": r[7] or 0,
-        })
-    return result
+    """列出所有 webhook。"""
+    return _wh.list_all()
 
 
 def update_webhook(wid, **kw):
-    init_events()
-    allowed = {"url", "secret", "events", "enabled"}
-    sets = []
-    vals = []
-    for k, v in kw.items():
-        if k not in allowed:
-            continue
-        if k == "secret" and v:
-            v = crypto.encrypt(v)
-        elif k == "secret" and not v:
-            v = ""
-        if k == "events":
-            v = json.dumps(v, ensure_ascii=False)
-        sets.append(f"{k}=?")
-        vals.append(v)
-    if not sets:
-        return False
-    vals.append(wid)
-    c = _conn()
-    c.execute(f"UPDATE webhooks SET {','.join(sets)} WHERE id=?", vals)
-    c.commit()
-    ok = c.total_changes > 0
-    c.close()
-    return ok
+    """更新 webhook。"""
+    return _wh.update(wid, **kw)
 
 
 def delete_webhook(wid):
-    init_events()
-    c = _conn()
-    c.execute("DELETE FROM webhooks WHERE id=?", (wid,))
-    c.commit()
-    ok = c.total_changes > 0
-    c.close()
-    return ok
+    """删除 webhook。"""
+    return _wh.delete(wid)
 
 
-# ---------------- 事件发射 ----------------
+# ---------------- 异步 Webhook 派发 -----------------
 
-def emit(event_type, data=None):
-    """发射一个事件：写入通知缓冲 + 推送到 SSE 客户端 + 异步派发 webhook。"""
-    evt = {
-        "type": event_type,
-        "data": data or {},
-        "timestamp": time.time(),
-    }
-
-    # 写入环形缓冲
-    with _notifications_lock:
-        _notifications.append(evt)
-
-    # 推送到所有 SSE 客户端
-    with _sse_lock:
-        for q in list(_sse_clients):
-            try:
-                q.put_nowait(evt)
-            except queue.Full:
-                pass   # 客户端来不及消费就跳过
-
-    # 异步 webhook 派发
+def _enqueue_webhook(evt):
+    """把事件推入异步派发队列。"""
     with _dispatch_cv:
         _dispatch_q.append(evt)
         _dispatch_cv.notify()
 
-    return evt
-
-
-def get_notifications(since=None, limit=50):
-    """获取最近的站内通知。"""
-    with _notifications_lock:
-        items = list(_notifications)
-    if since is not None:
-        items = [i for i in items if i["timestamp"] > since]
-    return items[-limit:]
-
-
-# ---------------- SSE 实时流 ----------------
-
-def subscribe_sse() -> queue.Queue:
-    """注册一个 SSE 客户端。返回 Queue，新事件会推入其中。"""
-    q = queue.Queue(maxsize=64)
-    with _sse_lock:
-        _sse_clients.add(q)
-    return q
-
-
-def unsubscribe_sse(q: queue.Queue):
-    """注销 SSE 客户端（前端断开连接时调用）。"""
-    with _sse_lock:
-        _sse_clients.discard(q)
-
-
-# ---------------- Webhook 异步派发 ----------------
-
-def _sign_payload(payload, secret):
-    if not secret:
-        return ""
-    # secret 在使用时解密
-    plain = crypto.decrypt(secret)
-    if not plain:
-        return ""
-    return hmac.new(plain.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
-
 
 def _dispatch_async(evt):
-    """把事件 POST 到所有匹配的 webhook。"""
-    init_events()
-    c = _conn()
-    rows = c.execute(
-        "SELECT id, url, secret, events, fail_count FROM webhooks WHERE enabled=1").fetchall()
-    c.close()
-
+    """把事件 POST 到所有匹配的 webhook（在后台线程执行）。"""
+    rows = _wh_list_enabled()
+    if not rows:
+        return
     payload = json.dumps(evt, ensure_ascii=False, default=str)
     for wid, url, secret_enc, evts_json, fail_count in rows:
         evts = json.loads(evts_json) if evts_json else ["*"]
@@ -242,30 +120,50 @@ def _dispatch_async(evt):
             continue
         try:
             headers = {"Content-Type": "application/json", "X-Harbor-Event": evt["type"]}
-            sig = _sign_payload(payload, secret_enc)
+            sig = _wh.sign_payload(payload, secret_enc)
             if sig:
                 headers["X-Harbor-Signature"] = f"sha256={sig}"
             req = urllib.request.Request(
-                url, data=payload.encode("utf-8"), headers=headers, method="POST")
+                url, data=payload.encode(), headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=8) as resp:
                 _ = resp.read()
-            # 成功 → 重置失败计数
-            c2 = _conn()
-            c2.execute("UPDATE webhooks SET last_triggered=?, fail_count=0 WHERE id=?",
-                       (time.time(), wid))
-            c2.commit()
-            c2.close()
+            _update_webhook_status(wid, success=True)
         except Exception:
-            new_fail = (fail_count or 0) + 1
-            c2 = _conn()
-            # 连续失败 5 次就自动禁用，避免一直刷
-            c2.execute("UPDATE webhooks SET fail_count=?, enabled=? WHERE id=?",
-                       (new_fail, 1 if new_fail < 5 else 0, wid))
-            c2.commit()
-            c2.close()
+            _update_webhook_status(wid, success=False, prev_fail=fail_count)
+
+
+def _wh_list_enabled():
+    """查询所有启用的 webhook。"""
+    try:
+        c = _wh._conn()
+        rows = c.execute(
+            "SELECT id, url, secret, events, fail_count FROM webhooks WHERE enabled=1"
+        ).fetchall()
+        c.close()
+        return rows
+    except Exception:
+        return []
+
+
+def _update_webhook_status(wid, success, prev_fail=0):
+    """更新 webhook 最后派发时间 + 失败计数。连续失败 5 次自动禁用。"""
+    try:
+        c = _wh._conn()
+        if success:
+            c.execute("UPDATE webhooks SET last_triggered=?, fail_count=0 WHERE id=?",
+                      (time.time(), wid))
+        else:
+            new_fail = (prev_fail or 0) + 1
+            c.execute("UPDATE webhooks SET fail_count=?, enabled=? WHERE id=?",
+                      (new_fail, 1 if new_fail < 5 else 0, wid))
+        c.commit()
+        c.close()
+    except Exception:
+        pass
 
 
 def _dispatcher_loop():
+    """后台派发线程：从队列取事件 → POST 到 webhook。"""
     global _dispatcher_running
     _dispatcher_running = True
     while _dispatcher_running:
@@ -281,53 +179,56 @@ def _dispatcher_loop():
             _dispatch_async(evt)
 
 
-_dispatcher_thread = None
-
-
 def start_dispatcher():
+    """启动异步 webhook 派发线程（幂等）。"""
     global _dispatcher_thread
     if _dispatcher_thread is None:
-        _dispatcher_thread = threading.Thread(target=_dispatcher_loop, daemon=True,
-                                              name="event-dispatcher")
+        from threading import Thread
+        _dispatcher_thread = Thread(target=_dispatcher_loop, daemon=True,
+                                    name="event-dispatcher")
         _dispatcher_thread.start()
 
 
 def stop_dispatcher():
+    """停止异步 webhook 派发线程。"""
     global _dispatcher_running
     _dispatcher_running = False
     with _dispatch_cv:
         _dispatch_cv.notify()
 
 
-# ---------------- 快捷：从 Hub / TaskManager 触发的事件包装 ----------------
+# ---------------- TaskManager 事件包装 -----------------
 
 def on_task_complete(task):
-    """任务完成/失败/等人工时，根据类型触发对应事件。"""
+    """任务完成 / 失败 / 等人工时，根据 status 触发对应事件。"""
     kind = task.get("kind", "")
     status = task.get("status", "")
     article_id = task.get("article_id")
-
     if status == "ok":
-        emit("task.ok", {"task_id": task.get("task_id"), "kind": kind, "article_id": article_id})
+        emit("task.ok", {"task_id": task.get("task_id"), "kind": kind,
+                         "article_id": article_id})
         if kind == "publish":
-            result = task.get("result", {})
+            result = task.get("result", {}) or {}
             platforms = []
             if isinstance(result, list):
                 platforms = [r.get("platform") for r in result if isinstance(r, dict)]
             elif isinstance(result, dict) and "results" in result:
                 platforms = [r.get("platform") for r in result["results"] if isinstance(r, dict)]
-            emit("publish.ok", {"task_id": task.get("task_id"), "article_id": article_id,
-                                "platforms": platforms})
+            emit("publish.ok", {"task_id": task.get("task_id"),
+                                "article_id": article_id, "platforms": platforms})
     elif status == "failed":
         emit("task.failed", {"task_id": task.get("task_id"), "kind": kind,
                              "error": task.get("error", "")[:200]})
         if kind == "publish":
-            emit("publish.failed", {"task_id": task.get("task_id"), "article_id": article_id,
+            emit("publish.failed", {"task_id": task.get("task_id"),
+                                    "article_id": article_id,
                                     "error": task.get("error", "")[:200]})
     elif status == "waiting_human":
         emit("task.waiting_human", {"task_id": task.get("task_id"), "kind": kind,
                                     "message": task.get("message", "")})
 
 
-# 启动派发线程
+_dispatcher_thread = None
+
+# 启动派发线程（模块加载时）
 start_dispatcher()

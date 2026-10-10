@@ -16,6 +16,7 @@ if str(BACKED_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKED_ROOT))
 
 from service.publishing import db, events, observability as obs  # noqa: E402
+from service.publishing import _webhook_store as _wh  # noqa: E402
 
 
 class _NullLogger:
@@ -39,7 +40,7 @@ def sandbox(tmp_path, monkeypatch):
     db_file = data / "hub.db"
 
     monkeypatch.setattr(db, "DB_PATH", db_file)
-    monkeypatch.setattr(events, "_DB_PATH", db_file)
+    monkeypatch.setattr(_wh, "_DB_PATH", db_file)
     monkeypatch.setattr(obs, "EVENT_LOG", data / "observability" / "events.log")
     monkeypatch.setattr(obs, "_event_logger", _NullLogger())
 

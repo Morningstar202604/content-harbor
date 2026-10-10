@@ -333,6 +333,23 @@ class PlatformAdapter:
     selector_version = ""    # 例如 "2026-09"（适配/验证时手动更新）
     key_selectors = {}       # 例如 {"editor": ".CodeMirror", "publish_btn": "button:has-text('发布')"}
 
+    # ---------------- 外部成熟工具兜底 -----------------
+
+    @classmethod
+    def publish_with_provider(cls, article: dict, options: dict = None) -> dict | None:
+        """优先走外部成熟工具（providers/），失败或未安装返回 None 让调用方回退 Playwright。"""
+        if not cls.id:
+            return None
+        try:
+            from service.publishing.providers import resolve_provider
+            provider = resolve_provider(cls.id)
+            if not provider or not provider.is_available() or not provider.check_auth():
+                return None
+            result = provider.publish(article, options)
+            return result.to_dict() if result else None
+        except Exception:
+            return None
+
     def sel_fail(self, sel_name):
         """选择器失效的统一报错：带上版本号与 DOM dump 指引，方便一键补适配。"""
         return PlatformError(
