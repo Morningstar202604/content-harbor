@@ -78,7 +78,6 @@ def update_article(article_id: int, title: str = None, content_md: str = None,
     """更新文章的任意字段。内容变更后会自动 pend 已发布平台的同步。"""
     kw = {k: v for k, v in locals().items()
           if k != "article_id" and v is not None}
-    kw.pop("article_id")
     ok, pending = _get_hub().edit(article_id, **kw)
     return {"ok": ok, "pending_sync": pending}
 
@@ -221,6 +220,138 @@ def import_markdown(path: str, tags: str = "") -> dict:
     """导入本地 Markdown 文件，自动提取 front-matter 元数据。"""
     aid = _get_hub().import_md(path, tags=tags)
     return {"id": aid}
+
+
+# ── 外部执行器：Wechatsync（可选后端，不可用时优雅降级）──────────────────
+#
+# 为什么接它：Wechatsync 支持 29+ 平台且直接调用各平台官方 Web API，比我们
+# 自带的浏览器自动化更快、更稳、不触发风控。代价是它跑在用户本机的 Chrome
+# 扩展里、需要各平台登录态——所以它是**可选执行后端**，不是替代品：
+# 本模块不可用时，下面所有 tool 返回 {available: false, ...}，
+# 原有 10 个适配器与 20 个 tool 完全不受影响。
+
+import os
+import shutil
+import subprocess
+
+
+def _ws_bin() -> str:
+    """定位 wechatsync CLI。不在 PATH 时返回空串。"""
+    return shutil.which("wechatsync") or ""
+
+
+def _ws_env() -> dict:
+    """透传必要环境变量给 wechatsync CLI（仅 PATH + WECHATSYNC_TOKEN，防泄露）。"""
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "WECHATSYNC_TOKEN": os.environ.get("WECHATSYNC_TOKEN", ""),
+    }
+
+
+def _ws_available() -> dict:
+    """探测外部执行器是否就绪（装了 CLI 且配了 token）。"""
+    binpath = _ws_bin()
+    token = os.environ.get("WECHATSYNC_TOKEN", "").strip()
+    return {
+        "installed": bool(binpath),
+        "binary": binpath,
+        "has_token": bool(token),
+        "ready": bool(binpath) and bool(token),
+    }
+
+
+def _ws_run(args, timeout=120):
+    """执行 wechatsync CLI 并解析其输出。
+
+    aqg: top-level boundary —— 外部进程可能不存在/超时/输出非预期 JSON，
+    一律转成结构化失败返回，绝不让异常冒泡打断整个 MCP 会话。
+    """
+    if not _ws_bin():
+        return {"ok": False, "available": False,
+                "error": "未安装 wechatsync CLI",
+                "hint": "npm install -g @wechatsync/cli"}
+    try:
+        proc = subprocess.run(
+            [_ws_bin(), *args], capture_output=True, text=True,
+            timeout=timeout, env=_ws_env())
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "available": True, "error": f"wechatsync 超时（>{timeout}s）",
+                "hint": "确认 Chrome 扩展已安装并启用「MCP 连接」"}
+    except Exception as e:
+        return {"ok": False, "available": True, "error": f"{type(e).__name__}: {e}"}
+
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        return {"ok": False, "available": True,
+                "error": (proc.stderr or out or "未知错误")[:500],
+                "returncode": proc.returncode}
+    return {"ok": True, "available": True, "output": out}
+
+
+@mcp.tool()
+def wechatsync_status() -> dict:
+    """查询外部执行器 Wechatsync 的就绪状态（是否安装、是否配 token）。
+
+    这是可选后端：未安装或未配 token 时返回 ready=false，
+    本内容港自带的 10 个平台适配器仍可正常使用。
+    """
+    st = _ws_available()
+    st["ok"] = True
+    st["note"] = ("就绪" if st["ready"] else
+                  "未就绪——安装 npm i -g @wechatsync/cli 并导出 WECHATSYNC_TOKEN")
+    st["fallback"] = "可改用内置适配器（publish_article），功能不依赖外部执行器"
+    return st
+
+
+@mcp.tool()
+def wechatsync_publish(article_id: int, platforms: str,
+                       title: str = "", cover: str = "",
+                       dry_run: bool = True) -> dict:
+    """把文章库里的一篇交给外部执行器 Wechatsync 分发到多个平台。
+
+    platforms：逗号分隔的平台 id（juejin,csdn,zhihu…），可超出内置 10 个。
+    dry_run 默认 True：只报告将要执行的动作，不实际发布。
+    真发布需用户本机 Chrome 扩展已安装并在各平台登录。
+
+    返回 {ok, available, output/error}。available=false 时请改用
+    publish_article（内置适配器）。
+    """
+    art = _get_hub().get(article_id)
+    if not art:
+        raise ValueError(f"文章 {article_id} 不存在")
+    if not platforms.strip():
+        raise ValueError("platforms 不能为空")
+
+    tmp = Path(os.environ.get("TEMP", "/tmp")) / f"harbor-ws-{article_id}.md"
+    try:
+        tmp.write_text(art.get("content_md", ""), encoding="utf-8")
+        args = ["sync", str(tmp), "-p", platforms]
+        if title:
+            args += ["-t", title]
+        if cover:
+            args += ["--cover", cover]
+        if dry_run:
+            args.append("--dry-run")
+        res = _ws_run(args)
+    finally:
+        tmp.unlink(missing_ok=True)          # 文章内容不留在磁盘上
+
+    res["article_id"] = article_id
+    res["platforms"] = platforms
+    res["dry_run"] = dry_run
+    return res
+
+
+@mcp.tool()
+def wechatsync_platforms() -> dict:
+    """经外部执行器列出 Wechatsync 支持的平台（29+，可超出内置 10 个）。
+
+    需要本机已装 CLI 且 Chrome 扩展在运行；否则返回 available=false。
+    """
+    res = _ws_run(["platforms"], timeout=30)
+    if res.get("ok"):
+        res["output"] = res.get("output", "")[:4000]
+    return res
 
 
 # ── 入口 ──────────────────────────────────────────────────────────────

@@ -54,14 +54,18 @@ def test_delete_webhook():
 
 
 def test_sign_payload_is_hmac_sha256():
+    from service.publishing import crypto
     body = json.dumps({"type": "task.ok"}, ensure_ascii=False)
-    sig = events._sign_payload(body, "topsecret")
+    # secret 落库时加密存储，传入 _sign_payload 的是密文
+    encrypted = crypto.encrypt("topsecret")
+    sig = events._sign_payload(body, encrypted)
     assert sig == hmac_mod.new(b"topsecret", body.encode("utf-8"),
                               hashlib.sha256).hexdigest()
     # 换密钥签名必须变，否则重放即伪造
-    assert events._sign_payload(body, "other") != sig
+    assert events._sign_payload(body, crypto.encrypt("other")) != sig
     # 没配 secret 就不签（不伪造空签名头）
     assert events._sign_payload(body, "") == ""
+    assert events._sign_payload(body, crypto.encrypt("")) == ""
 
 
 def test_emit_appends_to_notification_ring():

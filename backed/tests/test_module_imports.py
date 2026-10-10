@@ -32,7 +32,6 @@ MODULES = [
     "core.security",
     "core.permissions",
     "middleware",
-    "utils.audit",
     "utils.logger",
     "utils.masking",
     "service.publishing.ai",
@@ -59,8 +58,8 @@ def test_module_imports(module):
 
 
 def test_audit_has_no_undeclared_dependency_import():
-    """utils/audit.py 必须是零第三方 ORM 依赖（项目用裸 sqlite3）。"""
-    src = (BACKED_ROOT / "utils" / "audit.py").read_text(encoding="utf-8")
+    """service/publishing/observability.py 中的审计代码必须是零第三方 ORM 依赖（项目用裸 sqlite3）。"""
+    src = (BACKED_ROOT / "service" / "publishing" / "observability.py").read_text(encoding="utf-8")
     assert "import sqlalchemy" not in src
     assert "from sqlalchemy" not in src
 

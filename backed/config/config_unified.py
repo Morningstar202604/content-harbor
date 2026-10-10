@@ -42,7 +42,7 @@ class BaseConfig(BaseSettings):
     # =================================================================
     environment: Environment = Environment.DEVELOPMENT
     project_name: str = "ai-content-hub-backend"
-    project_version: str = "0.1.0"
+    project_version: str = "0.6.5"
     api_version: str = "v1"
     api_prefix: str = "/api/v1"
     
@@ -109,7 +109,7 @@ class BaseConfig(BaseSettings):
     # =================================================================
     # 安全基础配置
     # =================================================================
-    allowed_hosts: List[str] = ["*"]
+    allowed_hosts: List[str] = []
     cors_origins: List[str] = ["*"]
     cors_allow_credentials: bool = True
     cors_allow_methods: List[str] = ["*"]

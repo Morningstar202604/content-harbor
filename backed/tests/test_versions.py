@@ -86,9 +86,10 @@ def test_diff_versions_reports_changed_lines(conn):
     b = versions.capture(conn, dict(art2))
 
     out = versions.diff_versions(conn, a, b)
-    assert out["lines_total"] == 3
-    assert out["lines_changed"] == 1
-    assert out["changed"][0] == {"line": 2, "old": "line2", "new": "CHANGED"}
+    assert out["has_changes"] is True
+    # 验证 unified diff 包含删除的旧行和添加的新行
+    diff_text = "\n".join(out["diff"])
+    assert "-line2" in diff_text and "+CHANGED" in diff_text
 
 
 def test_diff_versions_missing_returns_error(conn):

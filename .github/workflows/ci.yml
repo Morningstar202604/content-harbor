@@ -20,9 +20,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
       - uses: pnpm/action-setup@v4
         with:
           version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: backed/pnpm-lock.yaml
       - name: 安装 uv
         run: pip install uv
       - name: 安装依赖（uv sync，含 dev 组）
@@ -33,10 +39,15 @@ jobs:
         run: uv run python -m compileall -q .
       - name: 静态门禁（ruff：未定义名 / 运行时错误）
         run: uv run ruff check .
+      - name: 依赖安全扫描（pip-audit）
+        continue-on-error: true
+        run: |
+          uv run pip install pip-audit
+          uv run pip-audit --strict || true
       - name: 单元测试（pytest）
-        run: uv run pytest -q --no-header -p no:cacheprovider
+        run: uv run pytest -q --no-header
       - name: 启动冒烟测试（应用可装配、API 可访问）
-        run: uv run python -c "from app.factory import create_app; create_app(); print('app assembled ok')"
+        run: uv run python -c "from app.factory import create_app; assert create_app(); print('app assembled ok')"
 
   frontend:
     runs-on: ubuntu-latest

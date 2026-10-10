@@ -16,6 +16,7 @@
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -123,6 +124,7 @@ class _ProviderState:
     """Provider 运行时状态：失败计数 + 冷却时间，自动备援。"""
 
     def __init__(self):
+        self._lock = threading.Lock()
         self.fail_count = {}       # provider_key -> 连续失败次数
         self.cool_until = {}       # provider_key -> 冷却截止时间
         self.last_used = {}        # provider_key -> 上次使用时间
@@ -132,13 +134,15 @@ class _ProviderState:
         return until > time.time()
 
     def record_fail(self, key):
-        self.fail_count[key] = self.fail_count.get(key, 0) + 1
-        if self.fail_count[key] >= 3:
-            self.cool_until[key] = time.time() + 120  # 冷却 2 分钟
+        with self._lock:
+            self.fail_count[key] = self.fail_count.get(key, 0) + 1
+            if self.fail_count[key] >= 3:
+                self.cool_until[key] = time.time() + 120  # 冷却 2 分钟
 
     def record_ok(self, key):
-        self.fail_count[key] = 0
-        self.last_used[key] = time.time()
+        with self._lock:
+            self.fail_count[key] = 0
+            self.last_used[key] = time.time()
 
 
 _state = _ProviderState()

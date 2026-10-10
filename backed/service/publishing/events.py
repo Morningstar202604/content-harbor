@@ -1,19 +1,22 @@
-# -*- utf-8 -*-
-"""事件系统：任务结果 webhook 推送 + 站内通知。
+# -*- coding: utf-8 -*-
+"""事件系统：任务结果 webhook 推送 + 站内通知 + SSE 实时流。
 
 解决什么问题：
   - 发布/更新任务完成后，外部系统无法实时感知（原来只能轮询任务接口）
-  - 没有通知中心，前端只靠 30 秒一次的 polling 感知新事件
+  - 没有通知中心，前端只靠 2 秒一次的 polling 感知新事件
+  - 改成 SSE 后前端实时收到任务状态变更，不再需要暴力轮询
 
 架构：
-  - webhooks 表：注册需要推送的事件类型 + URL + secret
+  - webhooks 表：注册需要推送的事件类型 + URL + secret（Fernet 加密落库）
   - 事件触发：TaskManager / Hub 在关键节点 emit() 同步 → 异步派发线程 POST 到 webhook
-  - 通知中心：内存环形缓冲（最近 100 条），前端 GET /events 拉取、SSE 实时推送
+  - 站内通知：内存环形缓冲（最近 200 条），前端 GET /events 拉取
+  - SSE 实时流：前端 GET /events/stream 建立长连接，服务端推送新事件
 """
 
 import hashlib
 import hmac
 import json
+import queue
 import threading
 import time
 import urllib.request
@@ -22,6 +25,8 @@ from collections import deque
 from pathlib import Path
 
 import sqlite3 as _sql
+
+from service.publishing import crypto
 
 ROOT = Path(__file__).resolve().parent.parent
 _DB_PATH = ROOT / "data" / "hub.db"
@@ -44,6 +49,10 @@ EVENT_TYPES = {
 # 站内通知环形缓冲（跨线程安全）
 _notifications = deque(maxlen=200)
 _notifications_lock = threading.Lock()
+
+# SSE 客户端队列（每个连接一个 Queue）
+_sse_clients: set[queue.Queue] = set()
+_sse_lock = threading.Lock()
 
 # 异步派发队列
 _dispatch_q = deque()
@@ -78,14 +87,15 @@ def init_events(conn=None):
 
 
 def register_webhook(url, events=None, secret="", enabled=True):
-    """注册一个 webhook。返回 webhook id。"""
+    """注册一个 webhook。secret 加密落库。返回 webhook id。"""
     init_events()
     c = _conn()
+    # 加密敏感字段
+    encrypted_secret = crypto.encrypt(secret) if secret else ""
     events_json = json.dumps(events or ["*"], ensure_ascii=False)
-    # lastrowid 在 Cursor 上，不在 Connection 上——直接 c.lastrowid 会 AttributeError
     cur = c.execute(
         "INSERT INTO webhooks (url, secret, events, enabled) VALUES (?, ?, ?, ?)",
-        (url, secret or "", events_json, 1 if enabled else 0))
+        (url, encrypted_secret, events_json, 1 if enabled else 0))
     c.commit()
     wid = cur.lastrowid
     c.close()
@@ -102,8 +112,10 @@ def list_webhooks():
     result = []
     for r in rows:
         evts = json.loads(r[3]) if r[3] else ["*"]
+        # 解密 secret（仅在有值时判断是否有 secret，不返回实际值）
+        plain_secret = crypto.decrypt(r[2]) if r[2] else ""
         result.append({
-            "id": r[0], "url": r[1], "has_secret": bool(r[2]),
+            "id": r[0], "url": r[1], "has_secret": bool(plain_secret),
             "events": evts, "enabled": bool(r[4]),
             "created_at": r[5], "last_triggered": r[6] or 0,
             "fail_count": r[7] or 0,
@@ -119,6 +131,10 @@ def update_webhook(wid, **kw):
     for k, v in kw.items():
         if k not in allowed:
             continue
+        if k == "secret" and v:
+            v = crypto.encrypt(v)
+        elif k == "secret" and not v:
+            v = ""
         if k == "events":
             v = json.dumps(v, ensure_ascii=False)
         sets.append(f"{k}=?")
@@ -147,7 +163,7 @@ def delete_webhook(wid):
 # ---------------- 事件发射 ----------------
 
 def emit(event_type, data=None):
-    """发射一个事件：写入通知缓冲 + 异步派发 webhook。"""
+    """发射一个事件：写入通知缓冲 + 推送到 SSE 客户端 + 异步派发 webhook。"""
     evt = {
         "type": event_type,
         "data": data or {},
@@ -158,7 +174,15 @@ def emit(event_type, data=None):
     with _notifications_lock:
         _notifications.append(evt)
 
-    # 异步派发
+    # 推送到所有 SSE 客户端
+    with _sse_lock:
+        for q in list(_sse_clients):
+            try:
+                q.put_nowait(evt)
+            except queue.Full:
+                pass   # 客户端来不及消费就跳过
+
+    # 异步 webhook 派发
     with _dispatch_cv:
         _dispatch_q.append(evt)
         _dispatch_cv.notify()
@@ -175,12 +199,32 @@ def get_notifications(since=None, limit=50):
     return items[-limit:]
 
 
+# ---------------- SSE 实时流 ----------------
+
+def subscribe_sse() -> queue.Queue:
+    """注册一个 SSE 客户端。返回 Queue，新事件会推入其中。"""
+    q = queue.Queue(maxsize=64)
+    with _sse_lock:
+        _sse_clients.add(q)
+    return q
+
+
+def unsubscribe_sse(q: queue.Queue):
+    """注销 SSE 客户端（前端断开连接时调用）。"""
+    with _sse_lock:
+        _sse_clients.discard(q)
+
+
 # ---------------- Webhook 异步派发 ----------------
 
 def _sign_payload(payload, secret):
     if not secret:
         return ""
-    return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    # secret 在使用时解密
+    plain = crypto.decrypt(secret)
+    if not plain:
+        return ""
+    return hmac.new(plain.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def _dispatch_async(evt):
@@ -192,13 +236,13 @@ def _dispatch_async(evt):
     c.close()
 
     payload = json.dumps(evt, ensure_ascii=False, default=str)
-    for wid, url, secret, evts_json, fail_count in rows:
+    for wid, url, secret_enc, evts_json, fail_count in rows:
         evts = json.loads(evts_json) if evts_json else ["*"]
         if "*" not in evts and evt["type"] not in evts:
             continue
         try:
             headers = {"Content-Type": "application/json", "X-Harbor-Event": evt["type"]}
-            sig = _sign_payload(payload, secret)
+            sig = _sign_payload(payload, secret_enc)
             if sig:
                 headers["X-Harbor-Signature"] = f"sha256={sig}"
             req = urllib.request.Request(
@@ -211,7 +255,7 @@ def _dispatch_async(evt):
                        (time.time(), wid))
             c2.commit()
             c2.close()
-        except Exception:   # aqg: top-level boundary（推送失败只记失败计数，不打断其余 webhook）
+        except Exception:
             new_fail = (fail_count or 0) + 1
             c2 = _conn()
             # 连续失败 5 次就自动禁用，避免一直刷
@@ -238,6 +282,7 @@ def _dispatcher_loop():
 
 
 _dispatcher_thread = None
+
 
 def start_dispatcher():
     global _dispatcher_thread

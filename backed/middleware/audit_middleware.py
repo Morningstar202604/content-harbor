@@ -14,7 +14,7 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
-from utils.audit import audit_logger, AuditAction
+from service.publishing.observability import audit_logger, AuditAction
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)

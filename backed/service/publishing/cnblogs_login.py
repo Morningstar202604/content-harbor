@@ -152,7 +152,7 @@ def login_browser(br, username, password, on_captcha="handoff", timeout=600):
         page.keyboard.press("Control+a")
         page.keyboard.press("Delete")
         page.keyboard.type(password, delay=45)
-        out["typed"] = {"username": u.input_value(), "password": "***"}
+        out["typed"] = {"username": u.input_value()[:3] + "***", "password": "***"}
         time.sleep(0.4)
 
         page.locator("button:has-text('登')").first.click()

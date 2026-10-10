@@ -59,12 +59,14 @@ def _mount_web_ui(app: FastAPI) -> None:
 def create_app() -> FastAPI:
     app = FastAPI(**AppConfig.get_app_config(), lifespan=lifespan)
 
-    # 非 debug 时限制 Host（Docker/本地可在 .env 配置 ALLOWED_HOSTS）
+    # 非 debug 时限制 Host（需在 .env 设置 ALLOWED_HOSTS，否则不启用）
     if not settings.debug:
-        app.add_middleware(
-            TrustedHostMiddleware,
-            allowed_hosts=getattr(settings, "allowed_hosts", ["*"]),
-        )
+        hosts = getattr(settings, "allowed_hosts", None)
+        if hosts:  # 非空列表才启用 TrustedHost
+            app.add_middleware(
+                TrustedHostMiddleware,
+                allowed_hosts=hosts,
+            )
 
     setup_middleware(app)
     setup_exception_handlers(app)

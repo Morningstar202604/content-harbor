@@ -6,26 +6,28 @@
 同时保留 ``app`` 以便独立运行（``python -m api.hub`` / ``uvicorn api.hub:app``）。
 """
 
+import asyncio
 import json
 import os
+import queue
 import time
 from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from service.publishing import observability as obs
+from service.publishing import events as evt_mod
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 # ---------------- 惰性单例 ----------------
 _hub_instance = None
-_task_manager = None
 
 
 def get_hub():
@@ -38,13 +40,13 @@ def get_hub():
 
 
 def get_task_manager():
-    """惰性创建 TaskManager 单例。"""
-    global _task_manager
-    if _task_manager is None:
-        from service.publishing.tasks import TaskManager
-        from service.publishing import db
-        _task_manager = TaskManager(get_hub(), db.connect())
-    return _task_manager
+    """返回 Hub 内部的 TaskManager（保持向后兼容）。
+
+    .. deprecated::
+        统一通过 ``get_hub().tasks`` 访问，不要直接创建独立 TaskManager，
+        否则两个 manager 共用一条 SQLite 连接会产生竞态。
+    """
+    return get_hub().tasks
 
 
 hub_router = APIRouter()
@@ -54,12 +56,22 @@ hub_router = APIRouter()
 # config.json 里配 "api_token": "一串随机字符串" 即启用：
 # 非信任来源的所有请求，必须带 X-API-Token 头。默认不配 = 不启用（本地用）。
 # 信任来源：本机回环 / testclient / 信任网段（可经环境变量 TRUSTED_NETS 追加 CIDR）。
+_api_token_cache: Optional[tuple[float, str]] = None
+
+
 def _api_token():
+    """读取 API Token（带 1s 缓存，避免每次请求读盘）。"""
+    global _api_token_cache
+    import time as _t
+    if _api_token_cache and (_t.monotonic() - _api_token_cache[0]) < 1.0:
+        return _api_token_cache[1]
     try:
-        return (json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
-                or {}).get("api_token") or ""
+        tok = (json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+               or {}).get("api_token") or ""
     except Exception:
-        return ""
+        tok = ""
+    _api_token_cache = (_t.monotonic(), tok)
+    return tok
 
 
 def _trusted_sources():
@@ -71,16 +83,33 @@ def _trusted_sources():
     return nets
 
 
+def _trusted_proxies():
+    """受信反向代理 IP 网段。仅当直连 peer 在这些网段内时才信任 X-Forwarded-For。"""
+    nets = os.environ.get("TRUSTED_PROXIES", "").strip()
+    return [n.strip() for n in nets.split(",") if n.strip()]
+
+
 def _client_ip(request):
-    """反代感知取真实客户端 IP：优先 X-Forwarded-For 首个，回退到直连 host。"""
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        first = fwd.split(",")[0].strip()
-        try:
-            return ip_address(first)
-        except ValueError:
-            pass
+    """取真实客户端 IP。
+
+    安全策略：仅当直连 peer 在 TRUSTED_PROXIES 网段内时，才信任
+    X-Forwarded-For 头。否则直接用直连 host，防止 IP 伪造绕过鉴权。
+    """
     host = request.client.host if request.client else ""
+    trusted = _trusted_proxies()
+    if trusted and host:
+        try:
+            host_ip = ip_address(host)
+            if any(host_ip in ip_network(net, strict=False) for net in trusted):
+                fwd = request.headers.get("x-forwarded-for")
+                if fwd:
+                    first = fwd.split(",")[0].strip()
+                    try:
+                        return ip_address(first)
+                    except ValueError:
+                        pass
+        except (ValueError, TypeError):
+            pass
     if host:
         try:
             return ip_address(host)
@@ -108,7 +137,7 @@ def _attach_middleware(app: FastAPI) -> None:
         token = _api_token()
         if token and not _is_trusted(request) \
                 and request.headers.get("X-API-Token") != token:
-            return JSONResponse({"detail": "无效的 API Token"}, status_code=401)
+            raise HTTPException(status_code=401, detail="无效的 API Token")
         return await call_next(request)
 
     # ---------------- 可观测性：结构化 access log + 指标 ----------------
@@ -203,6 +232,12 @@ class AIRewriteIn(BaseModel):
 class AIModelIn(BaseModel):
     model: str = ""           # "provider:model_name" 或 "model_name"
     preferred_provider: str = ""
+
+
+@hub_router.get("/health")
+def health():
+    """桌面版 Tauri sidecar 健康检查端点。"""
+    return {"status": "ok", "service": "content-harbor"}
 
 
 @hub_router.get("/status")
@@ -558,6 +593,14 @@ def versions_list(aid: int, limit: int = 50):
     return list_versions(get_hub().conn, aid, limit=limit)
 
 
+# 注意：/diff 路由必须放在 /{vid} 之前，否则 "diff" 会被当作 vid 路径参数匹配
+@hub_router.get("/articles/{aid}/versions/diff")
+def versions_diff(aid: int, v1: int, v2: int):
+    """对比两个版本的差异。"""
+    from service.publishing.versions import diff_versions
+    return diff_versions(get_hub().conn, v1, v2)
+
+
 @hub_router.get("/articles/{aid}/versions/{vid}")
 def versions_get(aid: int, vid: int):
     from service.publishing.versions import get_version
@@ -565,13 +608,6 @@ def versions_get(aid: int, vid: int):
     if not v:
         raise HTTPException(404, "版本不存在")
     return v
-
-
-@hub_router.get("/articles/{aid}/versions/diff")
-def versions_diff(aid: int, v1: int, v2: int):
-    """对比两个版本的差异。"""
-    from service.publishing.versions import diff_versions
-    return diff_versions(get_hub().conn, v1, v2)
 
 
 @hub_router.post("/articles/{aid}/versions/{vid}/rollback")
@@ -785,6 +821,39 @@ def register_hub(app: FastAPI) -> None:
     - 主后端 ``app/factory.py`` 调用本函数即完成"把 server/api.py 合并进新后端"
     """
     app.include_router(hub_router, prefix="/api/hub")
+
+
+# ==================== SSE 实时事件流 ====================
+
+@hub_router.get("/events/stream")
+async def events_stream(request: Request):
+    """SSE 实时推送任务/发布/文章事件。前端用 EventSource 连。"""
+
+    async def event_generator():
+        q = evt_mod.subscribe_sse()
+        try:
+            # 首条：让前端知道连接已建立
+            yield f"event: connected\ndata: {json.dumps({'ts': time.time()})}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    evt = await asyncio.to_thread(q.get, timeout=1.0)
+                    data = json.dumps(evt, ensure_ascii=False, default=str)
+                    yield f"message: {data}\n\n"
+                except queue.Empty:
+                    # 心跳：防止 nginx/CDN 断连
+                    yield f": heartbeat {time.time()}\n\n"
+                except Exception:
+                    await asyncio.sleep(0.5)
+        finally:
+            evt_mod.unsubscribe_sse(q)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",    # 禁用 nginx 缓冲
+    })
 
 
 # ---------------- 独立运行入口 ----------------

@@ -121,34 +121,28 @@ def rollback(conn, version_id):
 
 
 def diff_versions(conn, v1_id, v2_id):
-    """对比两个版本的 content_md，返回行级 diff（简化版 unified diff）。
-
-    这里不做逐字 Myers diff（太重），而是按行 split 后做"哪些行变了"的标记。
-    够看就行——编辑器本身的"对比视图"未来可以接更细的算法。
-    """
+    """对比两个版本的 content_md，返回行级 unified diff。"""
+    import difflib
     _ensure_table(conn)
     v1 = get_version(conn, v1_id)
     v2 = get_version(conn, v2_id)
     if not v1 or not v2:
         return {"error": "版本不存在"}
-    lines1 = v1["content_md"].splitlines()
-    lines2 = v2["content_md"].splitlines()
-    # 简化：按行 hash 序列，双指针扫一遍
-    changed = []
-    max_len = max(len(lines1), len(lines2))
-    for i in range(max_len):
-        l1 = lines1[i] if i < len(lines1) else None
-        l2 = lines2[i] if i < len(lines2) else None
-        if l1 != l2:
-            changed.append({"line": i + 1, "old": l1, "new": l2})
+    lines1 = v1["content_md"].splitlines(keepends=True)
+    lines2 = v2["content_md"].splitlines(keepends=True)
+    diff = list(difflib.unified_diff(
+        lines1, lines2,
+        fromfile=f"v{v1['id']}",
+        tofile=f"v{v2['id']}",
+        lineterm="",
+    ))
     return {
         "v1": {"id": v1["id"], "change_kind": v1["change_kind"],
                "created_at": v1["created_at"], "title": v1["title"]},
         "v2": {"id": v2["id"], "change_kind": v2["change_kind"],
                "created_at": v2["created_at"], "title": v2["title"]},
-        "lines_total": max_len,
-        "lines_changed": len(changed),
-        "changed": changed[:100],   # 上限 100 行（避免大 diff 打爆前端）
+        "diff": diff,  # unified diff 文本行列表
+        "has_changes": len(diff) > 0,
     }
 
 

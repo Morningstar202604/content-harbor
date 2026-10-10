@@ -104,7 +104,7 @@ TaskManager Worker Thread (串行)
 DB (db.py, SQLite)
 ```
 
-**REST 异步模型**：`submit()` 立即返回 `task_id`，客户端轮询 `GET /tasks/{id}` 获取进度。
+**REST 异步模型**：`submit()` 立即返回 `task_id`，客户端轮询 `GET /api/hub/tasks/{id}` 获取进度。
 
 **MCP 同步模型**：MCP Hub 直接调用 `hub.publish(...)` 等函数，绕过 TaskManager，同步返回结果。
 

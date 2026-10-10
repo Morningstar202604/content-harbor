@@ -119,15 +119,13 @@ def _hub():
 
 
 def _wait_task(client, tid):
-    """轮询任务直到终态，返回终态任务体。"""
+    """轮询任务直到终态，返回终态任务体。容忍短暂 404（submit 在途）。"""
+    import time
     for _ in range(200):
         got = client.get(f"/api/hub/tasks/{tid}")
         body = got.json()
-        if got.status_code != 200:
-            break
-        if body["status"] in ("ok", "failed", "waiting_human"):
+        if got.status_code == 200 and body["status"] in ("ok", "failed", "waiting_human"):
             return body
-        import time
         time.sleep(0.05)
     raise AssertionError(f"任务 {tid} 未在超时前进入终态")
 

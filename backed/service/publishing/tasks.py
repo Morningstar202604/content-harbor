@@ -23,6 +23,7 @@ import time
 import uuid
 
 from service.publishing import db
+from service.publishing import events as evt_mod
 
 
 class TaskManager:
@@ -97,6 +98,9 @@ class TaskManager:
     def close(self):
         self._stop.set()
         self._wake.set()
+        # 等 worker 线程结束（最多 30 秒），避免浏览器资源未清理
+        self._worker.join(timeout=30)
+        evt_mod.stop_dispatcher()
 
     # ---------------- 内部实现 ----------------
 
@@ -133,7 +137,6 @@ class TaskManager:
                            result=json.dumps(result, ensure_ascii=False),
                            message="完成", finished_at=time.time())
             # 触发事件：任务完成
-            from service.publishing import events as evt_mod
             completed = db.get_task(self.conn, task_id)
             if completed:
                 try:
@@ -158,7 +161,6 @@ class TaskManager:
                                error=err, message=reason,
                                finished_at=time.time())
             # 触发事件：任务失败/等人工
-            from service.publishing import events as evt_mod
             completed = db.get_task(self.conn, task_id)
             if completed:
                 try:

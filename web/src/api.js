@@ -1,17 +1,50 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
-// dev 走 vite proxy(/api -> :8800)，生产构建后与 FastAPI 同源
+// hub_router 挂载在 /api/hub (api/hub.py:819)，前后端路径必须对齐。
+// 桌面模式：读 window.__TAURI_PORT__（等 sidecar 注入后动态获取）
+// Web 模式：与后端同域，直接用 /api/hub
+function getBaseURL() {
+  if (window.__TAURI_PORT__) {
+    return `http://127.0.0.1:${window.__TAURI_PORT__}/api/hub`
+  }
+  return '/api/hub'
+}
+
 const http = axios.create({
-  baseURL: import.meta.env.DEV ? '/api' : '',
+  baseURL: '/api/hub',
   timeout: 120000   // 发布/更新要开浏览器，慢是正常的
 })
 
+// 每次请求前动态设置 baseURL（处理 Tauri 端口延迟注入）
+http.interceptors.request.use(config => {
+  config.baseURL = getBaseURL()
+  return config
+})
+
+// 重试配置：网络错误 / 5xx 时自动重试
+const RETRYABLE = [408, 429, 500, 502, 503, 504]
+let _retryCount = 0
+const MAX_RETRIES = 3
+
 http.interceptors.response.use(
-  r => r.data,
-  err => {
+  r => { _retryCount = 0; return r.data },
+  async err => {
+    const cfg = err.config
+    const status = err.response?.status
+    // 可重试错误且未超次数：指数退避重试
+    if (RETRYABLE.includes(status) && (!cfg._retry || cfg._retry < MAX_RETRIES)) {
+      cfg._retry = (cfg._retry || 0) + 1
+      await new Promise(r => setTimeout(r, 500 * cfg._retry))
+      return http(cfg)
+    }
+    // 后端不可达（桌面端可能 sidecar 还没起来）→ 显示明确提示
+    if (!err.response && getBaseURL().includes('__TAURI_PORT__')) {
+      ElMessage.error('后端服务未启动，请检查桌面端 sidecar')
+    }
     const msg = err.response?.data?.detail || err.message || '请求失败'
     ElMessage.error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    _retryCount = 0
     return Promise.reject(err)
   }
 )

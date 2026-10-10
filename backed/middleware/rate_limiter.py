@@ -203,10 +203,15 @@ class RateLimiter:
     def is_allowed(
         self,
         key: str,
-        limit: int,
-        window: int,
+        limit: int = 60,
+        window: int = 60,
         burst: Optional[int] = None,
     ) -> Tuple[bool, Dict[str, Any]]:
+        """兼容旧接口——全局 _limiter 使用模块级默认配置。
+        
+        注：传入的 limit/window/burst 被忽略，如需多档限速请使用
+        middleware/rate_limiter.py InMemoryRateLimiter 直接扩展。
+        """
         return _limiter.is_allowed(key)
 
 

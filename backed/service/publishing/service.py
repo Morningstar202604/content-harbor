@@ -19,6 +19,9 @@ from service.publishing.tasks import TaskManager
 from service.publishing.scheduler import init_scheduler
 from service.publishing.versions import capture as ver_capture, init_versions
 from service.publishing.adapters.base import PlatformError, get_adapter
+from service.publishing.article_store import ArticleStore
+from service.publishing.browser_pool import BrowserPoolManager
+from service.publishing.ai_service import AIService
 
 
 def _content_hash(article):
@@ -65,69 +68,34 @@ class Hub:
         self.delay_article = (0, 0) if self.demo else (30, 90)
         # 遇到验证码时怎么处理：handoff=交人工 / abort=直接放弃
         self.on_captcha = "handoff"
-        # 无头浏览器实例池：key=(platform, account)，登录流程不走池（它要独立的有头实例）
-        self._pool = {}
-        self._pool_order = []
-        # FastAPI 同步端点跑在线程池，多线程同时 _acquire 会竞态——加锁护住 LRU
-        self._pool_lock = threading.Lock()
-        # 体检 B3 修复（QA 标质力 2026-09-21）：per-key 互斥。同一 (platform,account)
-        # 的浏览器实例是单线程玩物（Playwright sync 基于 greenlet），两个并发请求
-        # 拿同一个实例 = greenlet 崩溃。_pool_lock 只护字典读写，这里补"实例占用"互斥。
-        self._busy = {}
+        # 浏览器实例池（LRU + per-key 互斥，见 browser_pool.py）
+        self._browser_pool = BrowserPoolManager(headless)
+        # 文章 CRUD 仓库（纯 DB 操作，无浏览器/AI 依赖）
+        self.articles = ArticleStore(self.conn)
+        # AI 增强操作（写稿/改写/润色/工具），委托外部函数注入
+        self.ai = AIService(
+            self.conn, self.demo,
+            get_article_fn=self.get,
+            create_article_fn=self.create,
+            publish_fn=lambda *a, **kw: self.publish(*a, **kw),
+            update_fn=lambda *a, **kw: self.update(*a, **kw),
+        )
         # 进程退出兜底关浏览器（原来这行写在 _busy_for 的 return 后面，
         # 是永远执行不到的死代码——退出时浏览器从不自动关）
         atexit.register(self.close_all)
 
-    def _busy_for(self, platform, account):
-        """取（或建）per-key 互斥锁。调用方用 with 包住整个浏览器操作过程。"""
-        key = (platform, account)
-        with self._pool_lock:
-            if key not in self._busy:
-                self._busy[key] = threading.Lock()
-            return self._busy[key]
-
-    # ------------- 浏览器实例池 -------------
+    # ------------- 浏览器实例池（委托 _browser_pool）-------------
 
     def _acquire(self, platform, account):
-        """拿（或起）一个 headless 实例。拿到的不关，池里常驻复用。"""
-        key = (platform, account)
-        with self._pool_lock:
-            br = self._pool.get(key)
-            if br is not None:
-                if key in self._pool_order:
-                    self._pool_order.remove(key)
-                self._pool_order.append(key)          # touch LRU
-                return br
-            br = BuiltinBrowser(platform, account, headless=self.headless)
-            self._pool[key] = br
-            self._pool_order.append(key)
-            while len(self._pool_order) > self.POOL_MAX:
-                old = self._pool_order.pop(0)
-                victim = self._pool.pop(old, None)
-                if victim:
-                    try:
-                        victim.close()
-                    except Exception:
-                        pass
-            return br
+        """拿（或起）一个 headless 实例（委托 BrowserPoolManager）。"""
+        return self._browser_pool._acquire(platform, account)
 
     def _drop(self, platform, account):
-        """实例疑似崩了：踢出池关掉，下次 _acquire 会起全新的。
-        关闭经 browser_thread_run 路由——实例的 greenlet 属于浏览器线程，
-        跨线程 close 会抛（会被吞掉但状态关不干净）。"""
-        key = (platform, account)
-        with self._pool_lock:
-            victim = self._pool.pop(key, None)
-            if key in self._pool_order:
-                self._pool_order.remove(key)
-        if victim:
-            try:
-                browser_thread_run(victim.close)   # 已在浏览器线程则内联执行
-            except Exception:
-                pass
+        """实例疑似崩了：踢出池关掉（委托 BrowserPoolManager）。"""
+        return self._browser_pool._drop(platform, account)
 
     def close_all(self):
-        """进程退出前把池里所有浏览器关干净（atexit 兜底，CLI/serve 都生效）。"""
+        """进程退出前关浏览器 + 停调度器 + 关任务引擎（atext 兜底）。"""
         try:
             self.scheduler.stop()
         except Exception:
@@ -136,15 +104,7 @@ class Hub:
             self.tasks.close()
         except Exception:
             pass
-        with self._pool_lock:
-            victims = list(self._pool.values())
-            self._pool.clear()
-            self._pool_order.clear()
-        for br in victims:
-            try:
-                browser_thread_run(br.close)
-            except Exception:
-                pass
+        self._browser_pool.close_all_browsers()
 
     # ---------------- 账号 ----------------
 
@@ -418,7 +378,7 @@ class Hub:
         art = db.get_article(self.conn, article_id)
         if art and ("content_md" in kw or "title" in kw):
             # 改内容前存版本快照（只在真正改动内容时触发）
-            ver_capture(dict(art), change_kind="edit",
+            ver_capture(self.conn, dict(art), change_kind="edit",
                         change_note="手工编辑", created_by="human")
         ok = db.update_article(self.conn, article_id, **kw)
         pending = db.get_pending_updates(self.conn)
@@ -554,170 +514,64 @@ class Hub:
 
     def ai_write(self, topic, style="", words=2000, tags_hint="", publish_to=None,
                  model=None, preferred_provider=None):
-        """AI 写一篇并入库。传了 publish_to 就顺手发出去。
-
-        model: "provider:model_name" 指定，不指定时按 premium 路由。
-        合规闸门：AI 源文章发布强制 draft_only（人审闸门），禁止 AI 内容
-        直接正式上线。想上线须人工二次确认后再调 publish(draft_only=False)。
-        """
-        if self.demo:
-            art = self._demo_article(topic, style, words, tags_hint)
-        else:
-            from service.publishing import ai as ai_mod
-            art = ai_mod.write_article(topic, style, words, tags_hint,
-                                       model=model, preferred_provider=preferred_provider)
-        # 入库前打 AIGC 标识（法规要求显式标识 + 可追溯模型来源）
-        art = aigc_gate.add_aigc_label(art, art.get("ai_model", ""))
-        ext = json.loads(art.get("ext", "{}") or {})
-        aid = db.create_article(self.conn, art["title"], art["content_md"],
-                                summary=art["summary"], tags=art["tags"],
-                                source="ai", ai_model=art.get("ai_model", ""),
-                                ext=json.dumps(ext, ensure_ascii=False),
-                                status="draft")
-        out = {"id": aid, "title": art["title"], "summary": art["summary"],
-               "tags": art["tags"], "chars": len(art["content_md"]),
-               "aigc_labeled": True}
-        if publish_to:
-            # 人审闸门：AI 内容只发草稿，正式上线需人工确认后单独 publish
-            out["publish"] = self.publish(aid, publish_to, draft_only=True)
-            out["note"] = "AI 内容已按合规闸门以草稿(draft_only)发布；" \
-                          "确认无误后请调 /articles/{id}/publish(draft_only=false) 正式上线"
-        return out
+        """(委托 AIService)"""
+        return self.ai.ai_write(topic, style=style, words=words, tags_hint=tags_hint,
+                publish_to=publish_to, model=model, preferred_provider=preferred_provider)
 
     def ai_rewrite(self, article_id, instruction, publish_to=None, model=None,
                    preferred_provider=None):
-        """AI 改写已有文章，改完自动标记待同步。改写前存版本快照（可回滚）。
-
-        model: "provider:model_name" 指定改写模型。
-        """
-        from service.publishing import ai as ai_mod
-        art = self.get(article_id)
-        if not art:
-            raise ValueError(f"文章 {article_id} 不存在")
-        ver_capture(art, change_kind="ai_rewrite",
-                    change_note=f"AI 改写: {instruction[:80]}", created_by="ai")
-        new_md = ai_mod.rewrite(art["content_md"], instruction,
-                                model=model, preferred_provider=preferred_provider)
-        db.update_article(self.conn, article_id, content_md=new_md)
-        out = {"id": article_id, "chars": len(new_md),
-               "pending_sync": len(db.get_pending_updates(self.conn)),
-               "model": model or "auto"}
-        if publish_to:
-            out["update"] = self.update(article_id, publish_to)
-        return out
+        """(委托 AIService)"""
+        return self.ai.ai_rewrite(article_id, instruction,
+                publish_to=publish_to, model=model, preferred_provider=preferred_provider)
 
     def ai_polish(self, article_id, model=None, preferred_provider=None):
-        """AI 润色文章。润色前存版本快照（可回滚）。"""
-        from service.publishing import ai as ai_mod
-        art = self.get(article_id)
-        if not art:
-            raise ValueError(f"文章 {article_id} 不存在")
-        ver_capture(art, change_kind="ai_polish",
-                    change_note="AI 润色", created_by="ai")
-        new_md = ai_mod.polish(art["content_md"],
-                               model=model, preferred_provider=preferred_provider)
-        db.update_article(self.conn, article_id, content_md=new_md)
-        return {"id": article_id, "pending_sync": len(db.get_pending_updates(self.conn))}
-
-    # ---------------- AI 增强工具（翻译/配图/大纲/SEO/克隆）----------------
+        """(委托 AIService)"""
+        return self.ai.ai_polish(article_id, model=model, preferred_provider=preferred_provider)
 
     def ai_translate(self, article_id, target_lang="en", model=None,
                      preferred_provider=None):
-        """翻译文章到目标语言。语言代码：en/ja/ko/fr/de。"""
-        from service.publishing.ai_enhancements import translate
-        art = self.get(article_id)
-        if not art:
-            raise ValueError(f"文章 {article_id} 不存在")
-        translated = translate(art["content_md"], target_lang=target_lang,
-                              model=model, preferred_provider=preferred_provider)
-        return {"id": article_id, "target_lang": target_lang,
-                "chars": len(translated), "translated_md": translated[:2000]}
+        """(委托 AIService)"""
+        return self.ai.ai_translate(article_id, target_lang=target_lang,
+                model=model, preferred_provider=preferred_provider)
 
     def ai_image_prompts(self, article_id, n=3, model=None, preferred_provider=None):
-        """根据文章内容生成文生图 prompt（前端展示/复制给用户）。"""
-        from service.publishing.ai_enhancements import image_prompts
-        art = self.get(article_id)
-        if not art:
-            raise ValueError(f"文章 {article_id} 不存在")
-        prompts = image_prompts(art.get("title", ""), art.get("content_md", ""),
-                                n=n, model=model, preferred_provider=preferred_provider)
-        return {"id": article_id, "prompts": prompts}
+        """(委托 AIService)"""
+        return self.ai.ai_image_prompts(article_id, n=n, model=model,
+                preferred_provider=preferred_provider)
 
     def ai_outline(self, article_id):
-        """从已有文章提炼大纲。适合重组超长篇、确认某章节上下文。"""
-        from service.publishing.ai_enhancements import extract_outline
-        art = self.get(article_id)
-        if not art:
-            raise ValueError(f"文章 {article_id} 不存在")
-        outline = extract_outline(art.get("content_md", ""))
-        return {"id": article_id, "outline": outline}
+        """(委托 AIService)"""
+        return self.ai.ai_outline(article_id)
 
     def ai_seo(self, article_id):
-        """生成 SEO 元数据。"""
-        from service.publishing.ai_enhancements import seo_fields
-        art = self.get(article_id)
-        if not art:
-            raise ValueError(f"文章 {article_id} 不存在")
-        seo = seo_fields(art.get("title", ""), art.get("content_md", ""),
-                        art.get("tags", ""))
-        return {"id": article_id, **seo}
+        """(委托 AIService)"""
+        return self.ai.ai_seo(article_id)
 
     def clone(self, article_id):
-        """克隆文章：「标题（副本）」+克隆内容。返回新文章 ID。"""
-        from service.publishing.ai_enhancements import clone_article
-        art = self.get(article_id)
-        if not art:
-            raise ValueError(f"文章 {article_id} 不存在")
-        cloned = clone_article(art)
-        new_id = db.create_article(self.conn, **cloned)
-        return {"new_id": new_id, "title": cloned["title"]}
+        """(委托 AIService)"""
+        return self.ai.clone(article_id)
 
     def ai_write_with_template(self, topic, template_key="", **kw):
-        """用预置模板 AI 写文章。template_key: tutorial/opinion/deep_dive/news_brief。"""
-        from service.publishing.ai_enhancements import ai_write_with_template
-        return ai_write_with_template(topic, template_key, **kw)
+        """(委托 AIService)"""
+        return self.ai.ai_write_with_template(topic, template_key, **kw)
 
     def list_models(self):
-        """列出所有可用的 Provider + 模型，前端下拉菜单用。"""
-        from service.publishing import providers as prov_mod
-        return prov_mod.list_providers()
+        """(委托 AIService)"""
+        return self.ai.list_models()
 
     def content_qa(self, article_id=None, content_md=None, title=None,
-                   summary=None, tags=None):
-        """内容质检：可读性 + SEO + 重复度。可传入 article_id 或独立传入字段。"""
-        from service.publishing import content_qa as qa_mod
-
-        if article_id:
-            art = self.get(article_id)
-            if not art:
-                raise ValueError(f"文章 {article_id} 不存在")
-            content_md = art.get("content_md", "")
-            title = art.get("title", "")
-            summary = art.get("summary", "")
-            tags = art.get("tags", "")
-
-        # 获取库内文章做重复度对比
-        other = [dict(r) for r in db.list_articles(self.conn, limit=500)]
-        # 排除自身
-        if article_id:
-            other = [a for a in other if a["id"] != article_id]
-
-        return qa_mod.full_qa(
-            {"title": title or "", "content_md": content_md or "",
-             "summary": summary or "", "tags": tags or ""},
-            other_articles=other
-        )
+                  summary=None, tags=None):
+        """(委托 AIService)"""
+        return self.ai.content_qa(article_id=article_id, content_md=content_md,
+                title=title, summary=summary, tags=tags)
 
     def list_ai_templates(self):
-        """列出所有可用的 AI 写作模板。"""
-        from service.publishing.ai_enhancements import list_templates
-        return list_templates()
+        """(委托 AIService)"""
+        return self.ai.list_ai_templates()
 
     def ai_ready(self):
-        if self.demo:
-            return True
-        from service.publishing import ai as ai_mod
-        return ai_mod.is_ready()
+        """(委托 AIService)"""
+        return self.ai.ai_ready()
 
     def publish_single(self, article_id, platform, article, account="default",
                        draft_only=False, page_hook=None, settings=None):
@@ -754,12 +608,9 @@ class Hub:
                     "post_id": _pid, "post_url": _url, "edit_url": _url + "/edit",
                     "draft_only": draft_only, "demo": True,
                     "note": f"已模拟发布到《{_nm}》（演示模式）"}
-        """发布到单个平台并完成落库（jobs/publications 记账）。
-
-        统一入口：legacy 与任务引擎都走这里（重构第一刀）
-        共用的唯一发布原语。成功返回结果 dict（platform/ok/status/post_id/...），
-        失败在完成失败记账后抛异常。
-        """
+        # 统一入口：legacy 与任务引擎都走这里（重构第一刀）
+        # 共用的唯一发布原语。成功返回结果 dict（platform/ok/status/post_id/...），
+        # 失败在完成失败记账后抛异常。
         job = db.add_job(self.conn, "publish", article_id, platform)
         try:
             def _do(ad, page):
@@ -884,13 +735,11 @@ class Hub:
                           True, "演示模式：更新成功")
             return {"platform": platform, "ok": True, "demo": True,
                     "note": "演示模式：模拟更新成功"}
-        """原地更新单个平台实例并完成落库（jobs/publications 记账）。
-
-        legacy update() 循环体与工作流节点 update_instance 共用的唯一更新原语
-        （对称于 publish_single，M5/ADR-007）。pub 携带 post_id/edit_url。
-        成功返回 {'platform', 'ok': True}；失败在完成失败记账后抛异常。
-        平台间 sleep 由本层统一控制——
-        本方法为逐行搬移 legacy 循环体（R3 门禁：行为逐字不变）。"""
+        # legacy update() 循环体与工作流节点 update_instance 共用的唯一更新原语
+        # （对称于 publish_single，M5/ADR-007）。pub 携带 post_id/edit_url。
+        # 成功返回 {'platform', 'ok': True}；失败在完成失败记账后抛异常。
+        # 平台间 sleep 由本层统一控制——
+        # 本方法为逐行搬移 legacy 循环体（R3 门禁：行为逐字不变）。
         # 内容没变就不空发：改过的才值得占平台额度（B13 数据层加固）
         pub_hash = pub["content_hash"] if isinstance(pub, dict) else pub["content_hash"]
         if pub_hash == _content_hash(article):

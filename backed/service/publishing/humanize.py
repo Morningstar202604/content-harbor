@@ -41,7 +41,7 @@ def human_pause(a=0.4, b=1.4):
 
 
 def human_type(page, selector, text, wpm_range=(240, 420)):
-    """逐字符输入，速度有波动，偶尔"手抖"打错再退格。
+    """逐字符输入，速度按 WPM 换算并加随机波动。
 
     一次性 fill() 是最明显的行为指纹之一——没有任何人能在 0ms 内输入 11 个字符。
     """
@@ -112,7 +112,12 @@ def slide_to(page, distance, y_offset=0, steps=None, overshoot=True):
     要点：变速（先快后慢）、轻微 y 抖动、末端回弹。
     """
     steps = steps or random.randint(28, 45)
-    start_x, start_y = page.mouse._x if hasattr(page.mouse, "_x") else 0, y_offset
+    # 获取当前鼠标位置（通过 localStorage 而非私有属性 _x/_y）
+    try:
+        cur = page.evaluate("() => ({x: window.__lastMouseX || 0, y: window.__lastMouseY || 0})")
+        start_x, start_y = cur.get("x", 0), cur.get("y", y_offset)
+    except Exception:
+        start_x, start_y = 100, y_offset
 
     page.mouse.move(start_x, start_y)
     human_pause(0.1, 0.3)

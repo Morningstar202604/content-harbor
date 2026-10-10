@@ -420,7 +420,7 @@ class PlatformAdapter:
             data = json.loads(res["text"])
         except Exception:
             raise PlatformError(f"响应不是 JSON: {res['text'][:200]}")
-        if res["status"] != 200:
+        if not (200 <= int(res["status"]) < 300):
             raise PlatformError(f"PUT {url} 失败: {res['text'][:200]}")
         return data
 
@@ -437,7 +437,7 @@ class PlatformAdapter:
             data = json.loads(res["text"])
         except Exception:
             raise PlatformError(f"响应不是 JSON: {res['text'][:200]}")
-        if res["status"] != 200 or (isinstance(data, dict) and data.get("code") not in (0, None)):
+        if not (200 <= int(res["status"]) < 300) or (isinstance(data, dict) and data.get("code") not in (0, None)):
             raise PlatformError(f"POST {url} 失败: {res['text'][:200]}")
         return data
 

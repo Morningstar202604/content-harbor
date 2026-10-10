@@ -7,7 +7,7 @@
     :close-on-click-modal="false"
     destroy-on-close
   >
-    <!-- 发布中：紧凑进度条，不做"假装复杂的步骤页" -->
+    <!-- 发布中 -->
     <div v-if="running" class="pub-progress">
       <el-progress :percentage="progressPct" :stroke-width="10" :show-text="false" />
       <div class="pub-progress-note">
@@ -43,15 +43,14 @@
             </el-button>
           </div>
 
-          <!-- 平台特有字段：分类/标签，发布前可调 -->
           <div v-if="cfgOpen === p.id" class="plat-cfg" @click.stop>
             <el-select
-              v-if="CAT_OPTIONS[p.id]"
+              v-if="catOptions[p.id]"
               v-model="platformSettings[p.id].category"
               size="small" filterable allow-create
-              :placeholder="'分类（默认 ' + (CAT_OPTIONS[p.id][0]) + '）'"
+              :placeholder="'分类（默认 ' + (catOptions[p.id][0]) + '）'"
             >
-              <el-option v-for="c in CAT_OPTIONS[p.id]" :key="c" :label="c" :value="c" />
+              <el-option v-for="c in catOptions[p.id]" :key="c" :label="c" :value="c" />
             </el-select>
             <el-input
               v-model="platformSettings[p.id].tags"
@@ -61,8 +60,8 @@
         </div>
       </div>
       <div class="pub-tools">
-        <el-button size="small" text @click="selected = platforms.map(p => p.id)">全选</el-button>
-        <el-button size="small" text @click="selected = []">清空</el-button>
+        <el-button size="small" text @click="selectAll">全选</el-button>
+        <el-button size="small" text @click="clearAll">清空</el-button>
         <span class="pub-hint">点「设置」可调每个平台的分类/标签；灰色的平台先点「登录」扫码一次</span>
       </div>
       <el-checkbox v-model="draftOnly">只发草稿（先不公开，回头在平台上手动发布）</el-checkbox>
@@ -85,7 +84,7 @@
         <div v-else-if="!r.ok" class="res-note bad">{{ r.error }}</div>
       </div>
       <div class="pub-ops">
-        <el-button @click="reset">再发一次</el-button>
+        <el-button @click="handleReset">再发一次</el-button>
         <el-button type="primary" @click="goManage">去管理页看全部</el-button>
       </div>
     </div>
@@ -97,126 +96,46 @@
           发布到 {{ selected.length }} 个平台
         </el-button>
       </template>
-      <el-button v-if="done" @click="reset">关闭</el-button>
+      <el-button v-if="done" @click="handleReset">关闭</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
-import { ElNotification, ElMessage } from 'element-plus'
+import { watch } from 'vue'
 import { Loading, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import { useHubStore } from '@/stores/hub'
+import { usePublishWizard } from '@/composables/usePublishWizard'
 
 const emit = defineEmits(['update:modelValue', 'done'])
 const props = defineProps({
   modelValue: Boolean,
   platforms: { type: Array, default: () => [] },
 })
+
 const hub = useHubStore()
 
-const PLAT_MARKS = {
-  zhihu: '知', bilibili: 'B', cnblogs: '博', csdn: 'C', metaweblog: '站',
-  juejin: '掘', oschina: '开', segmentfault: '思', toutiao: '头'
-}
-const mark = p => PLAT_MARKS[p.id] || p.name?.[0] || '?'
+// 复用 composable 逻辑
+const pw = usePublishWizard(props.platforms)
+const { selected, draftOnly, running, done, results, platformSettings, cfgOpen, progressPct, catOptions, mark, toggle, toggleCfg, selectAll, clearAll } = pw
 
-// 平台可选分类（发布面板「设置」里可选；空=平台默认分类）
-const CAT_OPTIONS = {
-  juejin: ['后端', '前端', 'android', 'ios', '人工智能', '开发工具', '代码人生', '阅读'],
-  csdn: ['后端与架构设计', '前端开发', '移动开发', '人工智能', '网络安全', '云计算', '大数据', '物联网', '数据库', '运维', '程序人生', '其他'],
-}
-
-const selected = ref([])
-const draftOnly = ref(false)
-const running = ref(false)
-const done = ref(false)
-const results = ref([])
-// 平台特有字段：{ platformId: { category, tags } }
-const platformSettings = ref({})
-const cfgOpen = ref(null)
-const progressPct = computed(() => results.value.length
-  ? Math.min(95, Math.round(results.value.length / selected.value.length * 100))
-  : running.value ? 15 : 0)
-
-// 分类是长期偏好（记住，下次自动带出）；标签跟具体文章走（不跨文章复用）
-const CAT_MEM_KEY = 'harbor.publish.categories'
-function loadCatMem() {
-  try { return JSON.parse(localStorage.getItem(CAT_MEM_KEY) || '{}') } catch { return {} }
-}
-function saveCatMem() {
-  try {
-    const mem = {}
-    for (const id of Object.keys(platformSettings.value)) {
-      const cat = platformSettings.value[id]?.category
-      if (cat) mem[id] = cat
-    }
-    localStorage.setItem(CAT_MEM_KEY, JSON.stringify(mem))
-  } catch { /* 隐私模式等场景静默失败 */ }
-}
-function ensureCfg(id) {
-  if (!platformSettings.value[id]) {
-    const cat = loadCatMem()[id] || ''
-    platformSettings.value[id] = { category: cat, tags: '' }
-  }
-}
-// 分类一改就记，下次打开发布面板自动带出
-watch(platformSettings, () => saveCatMem(), { deep: true })
-function toggleCfg(id) {
-  if (cfgOpen.value === id) { cfgOpen.value = null; return }
-  cfgOpen.value = id
-  ensureCfg(id)
-}
-
-function toggle(id) {
-  const i = selected.value.indexOf(id)
-  i >= 0 ? selected.value.splice(i, 1) : selected.value.push(id)
-}
+// 分类记忆 watch
+watch(platformSettings, () => pw.rememberCategory(), { deep: true })
 
 async function run() {
-  running.value = true
-  done.value = false
-  results.value = []
-  try {
-    const t = await hub.publish(selected.value.slice(), draftOnly.value, platformSettings.value)
-    if (!t) return
-    const res = t.result || {}
-    results.value = Array.isArray(res) ? res : (res.results || [])
-    // 需要人工的弹常驻通知
-    for (const r of results.value) {
-      if (r.ok && r.warning) {
-        ElNotification({
-          title: `${r.platform} 需要人工收尾`,
-          message: (r.warning || '').slice(0, 120),
-          type: 'warning', duration: 0
-        })
-      }
-    }
-    await hub.loadPendingHuman()
-  } catch (e) {
-    // 合规门禁/其他拒绝：把原因亮出来，停留在选择界面让用户调整（如勾"只发草稿"）
-    results.value = []
-    ElMessage.error(e?.response?.data?.detail || e?.message || '发布失败，请查看任务记录')
-  }
-  running.value = false
-  if (results.value.length) {
+  await pw.runPublish(() => {
     done.value = true
     emit('done')
-  }
+  })
 }
 
-function reset() {
-  running.value = false
-  done.value = false
-  results.value = []
-  selected.value = []
-  platformSettings.value = {}
-  cfgOpen.value = null
+function handleReset() {
+  pw.reset()
   emit('update:modelValue', false)
 }
 
 function goManage() {
-  reset()
+  pw.reset()
   hub.switchView('manage')
 }
 </script>

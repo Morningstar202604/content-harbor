@@ -113,8 +113,8 @@ def _calc_next_run(schedule_type: str, schedule_expr: str, base: float = None) -
             if not m:
                 raise ValueError(f"weekly 格式应为 周几-HH:MI（如 1-08:30），收到 {schedule_expr!r}")
             weekday, h, mi = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            # weekday: 1=周一 ... 7=周日；strftime %w: 0=周日 1=周一 ... 6=周六
-            target_wd = weekday % 7  # 转换为 strftime 的 0=周日
+            # weekday: 1=周一 ... 7=周日 → Python weekday(): 0=周一 ... 6=周日
+            target_wd = (weekday - 1) % 7  # 周一(1)→0, ..., 周日(7)→6
             candidate = now.replace(hour=h, minute=mi, second=0, microsecond=0)
             days_ahead = (target_wd - candidate.weekday()) % 7
             if days_ahead == 0 and candidate.timestamp() <= now.timestamp():
@@ -143,22 +143,26 @@ def _cron_next(expr: str, now: datetime) -> float:
 
     minute_s, hour_s, dom_s, month_s, dow_s = parts
 
-    # 从 now+1min 开始搜，最多搜 366 天（理论上 cron 不会超过一年）
-    candidate = now + timedelta(minutes=1)
-    candidate = candidate.replace(second=0, microsecond=0)
+    # 从 now+1min 开始搜，最多搜 366 天（cron 表达式重复周期 ≤ 1 年）
+    # 优化：按天递增，每天先做 cheap reject（月/周不匹配则跳过 1440 步）
+    candidate = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+    for _ in range(366):  # 按天搜而非按分钟搜
+        if not (_cron_match(candidate.day, dom_s, 1, 31)
+                and _cron_match(candidate.month, month_s, 1, 12)
+                and _cron_match(candidate.isoweekday(), dow_s, 1, 7)):
+            candidate += timedelta(days=1)
+            candidate = candidate.replace(hour=0, minute=0)
+            continue
+        # 日匹配成功，再按小时+分钟搜这一天
+        for _m in range(1440):  # 当天分钟级搜索 ≤ 1440 步
+            if (_cron_match(candidate.minute, minute_s, 0, 59)
+                    and _cron_match(candidate.hour, hour_s, 0, 23)):
+                return candidate.timestamp()
+            candidate += timedelta(minutes=1)
+        # 当天无匹配，继续下一天
+        candidate = (candidate + timedelta(days=1)).replace(hour=0, minute=0)
 
-    for _ in range(527040):  # 366 天 × 1440 分
-        if (
-            _cron_match(candidate.minute, minute_s, 0, 59)
-            and _cron_match(candidate.hour, hour_s, 0, 23)
-            and _cron_match(candidate.day, dom_s, 1, 31)
-            and _cron_match(candidate.month, month_s, 1, 12)
-            and _cron_match(candidate.isoweekday() % 7, dow_s, 0, 6)
-        ):
-            return candidate.timestamp()
-        candidate += timedelta(minutes=1)
-
-    return (now + timedelta(days=1)).timestamp()
+    return (now + timedelta(days=1)).timestamp()  # 兜底：24 小时后
 
 
 def _cron_match(value: int, field: str, min_v: int, max_v: int) -> bool:
@@ -242,6 +246,17 @@ class Scheduler:
         """投递一个定时任务进 TaskManager，更新 last_run/next_run/run_count。"""
         now = time.time()
         try:
+            # 文章可能已被删除：推迟下一次执行，避免高频无效重试
+            art = self.conn.execute(
+                "SELECT id FROM articles WHERE id=?", (task_row["article_id"],)).fetchone()
+            if not art:
+                # 推迟下一次执行 10 分钟，避免被删文章导致高频无效重试
+                self.conn.execute(
+                    "UPDATE scheduled_tasks SET next_run=?, updated_at=? WHERE id=?",
+                    (now + 600, now, task_row["id"]))
+                self.conn.commit()
+                return
+
             task_id = self.hub.tasks.submit(
                 "publish",
                 article_id=task_row["article_id"],

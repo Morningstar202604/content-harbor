@@ -219,7 +219,7 @@
           <b>⏸ 人工任务</b>
           <div>{{ taskDetail.result.human_task.message }}</div>
           <div v-if="taskDetail.result.human_task.edit_url" class="dim">
-            <a :href="taskDetail.result.human_task.edit_url" target="_blank" class="p-link">
+            <a :href="taskDetail.result.human_task.edit_url" target="_blank" rel="noopener noreferrer" class="p-link">
               {{ taskDetail.result.human_task.edit_url }}
             </a>
           </div>
@@ -232,7 +232,7 @@
             <span v-if="r.warning" class="dim">需人工收尾</span>
             <span v-if="r.skipped" class="dim">已跳过（内容未变）</span>
             <span v-if="r.error" class="run-err">{{ r.error }}</span>
-            <a v-if="r.post_url" class="p-link" :href="r.post_url" target="_blank">文章链接</a>
+            <a v-if="r.post_url" class="p-link" :href="r.post_url" target="_blank" rel="noopener noreferrer">文章链接</a>
           </div>
         </div>
 
@@ -305,7 +305,17 @@ function acctState(platform) {
   return a && a.status === 'logined'
 }
 
-const goHandle = (it) => it.edit_url && window.open(it.edit_url, '_blank', 'noopener')
+const goHandle = (it) => {
+  const url = it.edit_url || it.post_url
+  if (!url) return
+  // XSS 防护：仅允许 http/https 协议，拒绝 javascript: / data: 等伪协议
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    }
+  } catch { /* 非法 URL 静默忽略 */ }
+}
 
 async function doResume(task, approved) {
   if (!approved) {
@@ -321,6 +331,7 @@ async function doResume(task, approved) {
 }
 
 async function showTask(row) {
+  taskDetail.value = null
   try {
     taskDetail.value = await api.task(row.task_id)
   } catch { taskDetail.value = null }

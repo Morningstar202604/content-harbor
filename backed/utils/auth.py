@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
@@ -40,12 +40,12 @@ class JWTAuthenticator:
         expires_delta: Optional[timedelta] = None,
     ) -> str:
         to_encode = data.copy()
-        expire = datetime.utcnow() + (
+        expire = datetime.now(timezone.utc) + (
             expires_delta
             if expires_delta is not None
             else timedelta(minutes=self.access_token_expire_minutes)
         )
-        to_encode.update({"exp": expire, "iat": datetime.utcnow()})
+        to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
 
         user_id = str(data.get("sub", "") or "")
         try:
@@ -72,7 +72,7 @@ class JWTAuthenticator:
             exp = payload.get("exp")
             if exp is None:
                 raise AuthenticationException("令牌格式无效")
-            if datetime.utcnow() > datetime.fromtimestamp(exp):
+            if datetime.now(timezone.utc) > datetime.fromtimestamp(exp, tz=timezone.utc):
                 log_security_event(
                     "TOKEN_EXPIRED",
                     user_id=str(payload.get("sub", "") or ""),

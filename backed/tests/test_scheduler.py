@@ -34,6 +34,11 @@ class FakeHub:
 @pytest.fixture
 def sched(sandbox):
     conn = db.connect(sandbox["db_file"])
+    # 为所有定时任务测试准备 dummy article（article_id=1）
+    conn.execute(
+        "INSERT OR IGNORE INTO articles (id, title, content_md, summary, status, created_at, updated_at) "
+        "VALUES (1, 'test', '# test', 'test', 'draft', datetime('now'), datetime('now'))")
+    conn.commit()
     hub = FakeHub(conn)
     s = Scheduler(hub, conn)
     yield s

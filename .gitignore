@@ -33,3 +33,8 @@ server/static/
 .vscode/
 .DS_Store
 .codebuddy/
+
+# Rust build artifacts (should never be committed)
+target/
+web/src-tauri/target/
+web/src-tauri/binaries/
