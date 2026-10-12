@@ -18,7 +18,6 @@ from service.publishing.tasks import TaskManager
 from service.publishing.scheduler import init_scheduler
 from service.publishing.versions import capture as ver_capture, init_versions
 from service.publishing.adapters.base import PlatformError, get_adapter
-from service.publishing.article_store import ArticleStore
 from service.publishing.browser_pool import BrowserPoolManager
 from service.publishing.ai_service import AIService
 
@@ -70,7 +69,6 @@ class Hub:
         # 浏览器实例池（LRU + per-key 互斥，见 browser_pool.py）
         self._browser_pool = BrowserPoolManager(headless)
         # 文章 CRUD 仓库（纯 DB 操作，无浏览器/AI 依赖）
-        self.articles = ArticleStore(self.conn)
         # AI 增强操作（写稿/改写/润色/工具），委托外部函数注入
         self.ai = AIService(
             self.conn, self.demo,

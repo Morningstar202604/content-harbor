@@ -3,6 +3,9 @@
 
 
 import re
+from urllib.parse import urlparse
+
+import ipaddress
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -27,6 +30,36 @@ def _check_account(account: str) -> str:
     if not _SAFE_NAME.match(account or ""):
         raise HTTPException(400, "account 只能含小写字母数字下划线短横，且长度 1-64")
     return account
+
+
+def _check_url_safety(url: str) -> str:
+    """SSRF 防护：拒绝指向内网/本地/云元数据的 URL。
+
+    允许的域名走白名单（平台域名），其余 IP 必须落在公网段。
+    本机部署场景（桌面版）豁免：ASSIST_ALLOW_LOCAL=1 可放开 localhost。
+    """
+    import os
+    allow_local = os.environ.get("ASSIST_ALLOW_LOCAL") == "1"
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if not host:
+        raise HTTPException(422, "url 必须含有效域名")
+
+    # 尝试解析为 IP（IP 字面量直接检查，域名查 DNS）
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private and not allow_local:
+            raise HTTPException(422, f"url 指向内网地址 {host}，被 SSRF 防护拦截")
+        if ip.is_loopback and not allow_local:
+            raise HTTPException(422, f"url 指向本机回环 {host}，被 SSRF 防护拦截")
+        if ip.is_link_local and not allow_local:
+            raise HTTPException(422, f"url 指向链路本地 {host}（含云元数据 169.254.x.x），被拦截")
+    except ValueError:
+        # 非 IP 字面量（域名），做主机名黑名单兜底
+        bad_hosts = ("localhost", "metadata.google.internal", "169.254.169.254")
+        if any(host.lower() == b or host.lower().endswith(b) for b in bad_hosts):
+            raise HTTPException(422, f"url 主机 {host} 在 SSRF 黑名单中")
+    return url
 
 
 class LoginIn(BaseModel):
@@ -109,8 +142,7 @@ def solve_captcha(platform: str, body: CaptchaIn):
 def assist_open(platform: str, body: AssistIn):
     """带登录态的内置有头浏览器打开平台页（人工步骤接管）。"""
     _check_platform(platform)
-    if not body.url.startswith(("http://", "https://")):
-        raise HTTPException(422, "url 必须是 http(s) 地址")
+    _check_url_safety(body.url)
     task_id = get_hub().tasks.submit("assist", platforms=[platform], url=body.url)
     return {"task_id": task_id, "status": "pending", "poll": f"/tasks/{task_id}"}
 

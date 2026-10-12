@@ -49,8 +49,13 @@ _dispatcher_running = False
 
 
 def init_events(conn=None):
-    """初始化事件系统（建 webhook 表 + 启动异步派发线程）。"""
+    """初始化事件系统（建 webhook 表 + 启动异步派发线程）。
+
+    由 Hub.__init__ 调用一次即可；幂等：重复调不会起第二个线程。
+    独立使用 events 模块（不经 Hub）的场景需先调 init_events() 再 emit()。
+    """
     _wh.init(conn)
+    start_dispatcher()
 
 
 def get_notifications(since=None, limit=50):
@@ -229,6 +234,7 @@ def on_task_complete(task):
 
 
 _dispatcher_thread = None
-
-# 启动派发线程（模块加载时）
-start_dispatcher()
+# 注意：派发线程改由 init_events() 显式启动（F-15 修复）。
+# 旧的模块导入时自动 start_dispatcher() 会导致 pytest 里无关测试也拉起守护线程，
+# 且多实例 Hub 场景下无法控制线程生命周期。
+# 独立使用 events 模块的场景需先调 init_events() 再 emit()。

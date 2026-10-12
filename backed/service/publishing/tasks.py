@@ -202,7 +202,12 @@ class TaskManager:
         raise ValueError(f"未知任务类型: {kind}")
 
     def _triage(self, kind, err, attempts):
-        """确定性失败分诊。返回 (action, reason)。"""
+        """确定性失败分诊。返回 (action, reason)。
+
+        F-20 改进：未分类错误在第 1 次尝试时给一次自动重试机会，
+        降低“操作太快被限流”等瞬态问题被永久 fail 的概率。
+        第 2 次仍未分类则永久 fail（不无限重试）。
+        """
         low = (err or "").lower()
         for h in self.HUMAN_HINTS:
             if h.lower() in low:
@@ -212,4 +217,7 @@ class TaskManager:
                 if attempts < self.MAX_ATTEMPTS:
                     return "retry", "网络/临时错误，自动重试"
                 return "fail", f"重试 {self.MAX_ATTEMPTS} 次仍失败"
-        return "fail", "未分类错误"
+        # 未分类错误：第一次给一次重试机会，第二次永久 fail
+        if attempts < 2:
+            return "retry", "未分类错误，自动重试一次"
+        return "fail", f"未分类错误（已重试 {attempts} 次）"

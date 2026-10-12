@@ -98,12 +98,15 @@ def style_file() -> Path:
 
 def load_style() -> str:
     """读写作风格档案。文件不存在/读失败一律降级为空串（不让风格配置拖垮写稿）。"""
+    import logging
     p = style_file()
-    # aqg: top-level boundary —— 风格档案是可选增强，读失败（编码/权限/路径含
-    # 非法字符）不能连带写稿失败，降级为"无档案"继续，属刻意边界
+    # 风格档案是可选增强，读失败（编码/权限/路径含非法字符）不连带写稿失败。
+    # F-28 改进：降级时打 warning 日志，避免用户以为配了 style 实际没生效。
     try:
         return p.read_text(encoding="utf-8").strip() if p.exists() else ""
-    except Exception:
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "写作风格档案读取失败（降级为无档案）: %s: %s", p, e)
         return ""
 
 

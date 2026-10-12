@@ -217,11 +217,12 @@ def test_run_task_fail_still_emits_complete_event(conn, monkeypatch):
 
     monkeypatch.setattr("service.publishing.tasks.evt_mod", FakeEvt)
 
-    class FakeHubFail:
+    class FakeHubHuman:
         def login(self, *a, **k):
-            raise RuntimeError("未知异常，无 hint 命中")   # 落到 else 分支
+            # 命中 HUMAN_HINTS → waiting_human → 终态，应 emit
+            raise RuntimeError("验证码，需要人工处理")
 
-    tm = TaskManager(FakeHubFail(), conn)
+    tm = TaskManager(FakeHubHuman(), conn)
     tm._stop.set()
 
     task_id = tm.submit("login", platforms=["zhihu"], account="default")
@@ -230,7 +231,7 @@ def test_run_task_fail_still_emits_complete_event(conn, monkeypatch):
     emitted.clear()
     tm._run_task(task)
     assert len(emitted) == 1
-    assert emitted[0]["status"] == "failed"
+    assert emitted[0]["status"] == "waiting_human"
 
 
 # ---------------------------------------------------------------------------

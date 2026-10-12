@@ -126,13 +126,15 @@ def test_network_error_retries_then_fails(tm):
     assert "自动重试" not in task["message"]
 
 
-@pytest.mark.parametrize("err,expected", [
-    ("ValueError: 未知任务类型: bogus", "fail"),
-    ("RuntimeError: 登录已失效，请重新登录", "human"),
-    ("ConnectionResetError: econnreset", "retry"),
+@pytest.mark.parametrize("err,attempts,expected", [
+    ("ValueError: 未知任务类型: bogus", 1, "retry"),
+    ("ValueError: 未知任务类型: bogus", 2, "fail"),
+    ("RuntimeError: 登录已失效，请重新登录", 1, "human"),
+    ("ConnectionResetError: econnreset", 1, "retry"),
 ])
-def test_triage_rules(tm, err, expected):
-    action, _reason = tm._triage("publish", err, 1)
+def test_triage_rules(tm, err, attempts, expected):
+    """F-20: 未分类错误第 1 次 retry，第 2 次 fail。"""
+    action, _reason = tm._triage("publish", err, attempts)
     assert action == expected
 
 
