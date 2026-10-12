@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ElNotification } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { api } from '@/api'
 
 // 子 store：按领域拆分
@@ -200,8 +200,6 @@ export const useHubStore = defineStore('hub', {
     loadNotifications(...a) { return useWebhookStore().loadNotifications(...a) },
   }
 })
-
-import { ElMessage } from 'element-plus'
 
 async function aiLoadTasks() {
   try { await useTaskStore().loadTasks(true) } catch { /* 静默 */ }

@@ -39,7 +39,7 @@ http.interceptors.response.use(
       return http(cfg)
     }
     // 后端不可达（桌面端可能 sidecar 还没起来）→ 显示明确提示
-    if (!err.response && getBaseURL().includes('__TAURI_PORT__')) {
+    if (!err.response && window.__TAURI_PORT__) {
       ElMessage.error('后端服务未启动，请检查桌面端 sidecar')
     }
     const msg = err.response?.data?.detail || err.message || '请求失败'
@@ -62,8 +62,12 @@ export const api = {
     http.get(`/accounts/${platform}/check`, { params: { account } }),
 
   // ---------------- 账号 / 登录（统一任务语义） ----------------
-  startLogin: (platform, account = 'default') =>
-    http.post(`/accounts/${platform}/login`, { account, timeout: 300 }),
+  startLogin: (platform, account = 'default', opts = {}) =>
+    http.post(`/accounts/${platform}/login`, {
+      account,
+      timeout: opts.timeout || 300,
+      on_captcha: opts.onCaptcha || 'handoff',
+    }),
   assistOpen: (platform, url) =>
     http.post(`/accounts/${platform}/assist`, { url }),
   refresh: (platform) => http.post(`/refresh/${platform}`),
@@ -122,7 +126,7 @@ export const api = {
   aiSeo: (id) => http.get(`/articles/${id}/ai-seo`),
   cloneArticle: (id) => http.post(`/articles/${id}/clone`),
   aiTemplates: () => http.get('/ai/templates'),
-  aiWriteTemplate: (data) => http.post('/ai/write-template', null, { params: data }),
+  aiWriteTemplate: (data) => http.post('/ai/write-template', data),
 
   // ---------------- 版本历史 ----------------
   versions: (id, limit = 50) => http.get(`/articles/${id}/versions`, { params: { limit } }),
