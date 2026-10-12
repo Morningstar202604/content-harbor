@@ -36,28 +36,30 @@ Push-Location $backed
 try {
     $env:UV_NO_PROGRESS = '1'
 
+    # 注意：scriptblock 内不写 `exit 1`。`& $Body` 在调用方作用域执行，
+    # scriptblock 内的 `exit` 会终止整个 pwsh 进程而不是回到 try/catch，
+    # 于是失败步骤之后的 pytest / vite build 会被静默跳过，汇总行也打不出来。
+    # 想中止就用 `throw`——它会在调用方异常冒泡，正好被 Invoke-Step 的 catch 接住。
+
     Invoke-Step '1/4 语法编译 compileall' {
         uv run python -m compileall -q .
-        if ($LASTEXITCODE -ne 0) { exit 1 }
     }
 
     Invoke-Step '2/4 静态门禁 ruff（backed + 根目录 mcp_server.py）' {
         uv run ruff check .
-        if ($LASTEXITCODE -ne 0) { exit 1 }
+        if ($LASTEXITCODE -ne 0) { throw "ruff backed 失败 (code=$LASTEXITCODE)" }
         # mcp_server.py 在仓库根，不在 backed/ 的 pyproject 作用域内，显式带上同一套规则
         uv run ruff check "$repoRoot/mcp_server.py" --select E9,F7,F82
-        if ($LASTEXITCODE -ne 0) { exit 1 }
+        if ($LASTEXITCODE -ne 0) { throw "ruff mcp_server.py 失败 (code=$LASTEXITCODE)" }
     }
 
     Invoke-Step '3/4 单元测试 pytest' {
         uv run pytest -q --no-header -p no:cacheprovider
-        if ($LASTEXITCODE -ne 0) { exit 1 }
     }
 
     if (Test-Path (Join-Path $repoRoot 'web\node_modules')) {
         Invoke-Step '4/4 前端构建 vite build' {
             pnpm --dir (Join-Path $repoRoot 'web') build
-            if ($LASTEXITCODE -ne 0) { exit 1 }
         }
     } else {
         Write-Host ""

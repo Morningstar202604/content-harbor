@@ -8,9 +8,6 @@ import hashlib
 import hmac
 import json
 import sqlite3 as _sql
-import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from service.publishing import crypto
@@ -28,21 +25,31 @@ def _conn():
 
 
 def init(conn=None):
-    """建 webhooks 表（如果还没有）。"""
+    """建 webhooks 表（如果还没有）。
+
+    无 conn 时自建并在完成后关闭（避免旧实现里每调一次 register/list_all
+    就泄漏一个 sqlite 连接，长时间跑会耗尽文件句柄）。传了 conn 则
+    不关，由调用方管理。
+    """
+    own = conn is None
     c = conn or _conn()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS webhooks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT NOT NULL,
-            secret TEXT DEFAULT '',
-            events TEXT DEFAULT '*',
-            enabled INTEGER DEFAULT 1,
-            created_at REAL DEFAULT (strftime('%s','now')),
-            last_triggered REAL DEFAULT 0,
-            fail_count INTEGER DEFAULT 0
-        )
-    """)
-    c.commit()
+    try:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS webhooks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                secret TEXT DEFAULT '',
+                events TEXT DEFAULT '*',
+                enabled INTEGER DEFAULT 1,
+                created_at REAL DEFAULT (strftime('%s','now')),
+                last_triggered REAL DEFAULT 0,
+                fail_count INTEGER DEFAULT 0
+            )
+        """)
+        c.commit()
+    finally:
+        if own:
+            c.close()
 
 
 def register(url, events=None, secret="", enabled=True):

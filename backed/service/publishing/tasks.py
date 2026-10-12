@@ -149,25 +149,25 @@ class TaskManager:
             err = f"{type(e).__name__}: {e}"
             action, reason = self._triage(kind, err, attempts)
             if action == "retry":
+                # 重试：任务回到 pending，不算终态，不 emit on_task_complete
+                # （旧实现在这里也调 on_task_complete，会把 "retry" 事件
+                # 发给订阅方，语义不对：任务并没结束）。
                 db.update_task(self.conn, task_id, status="pending",
                                error=err, message=f"自动重试（第 {attempts} 次）")
                 self._wake.set()   # 立即再消费
-            elif action == "human":
-                db.update_task(self.conn, task_id, status="waiting_human",
-                               error=err, message=reason,
-                               finished_at=time.time())
             else:
-                db.update_task(self.conn, task_id, status="failed",
+                status = "waiting_human" if action == "human" else "failed"
+                db.update_task(self.conn, task_id, status=status,
                                error=err, message=reason,
                                finished_at=time.time())
-            # 触发事件：任务失败/等人工
-            completed = db.get_task(self.conn, task_id)
-            if completed:
-                try:
-                    completed["platforms"] = json.loads(completed.get("platforms") or "[]")
-                except Exception:
-                    pass
-                evt_mod.on_task_complete(completed)
+                # 触发事件：任务失败/等人工
+                completed = db.get_task(self.conn, task_id)
+                if completed:
+                    try:
+                        completed["platforms"] = json.loads(completed.get("platforms") or "[]")
+                    except Exception:
+                        pass
+                    evt_mod.on_task_complete(completed)
         finally:
             db.prune_tasks(self.conn)
 
@@ -187,10 +187,14 @@ class TaskManager:
         if kind == "sync":
             return self.hub.sync_pending(account)
         if kind == "refresh":
+            extra = json.loads(task.get("result") or "{}")
             return self.hub.refresh(platforms[0] if platforms else None,
-                                    account, limit=50)
+                                    account, limit=extra.get("limit", 50))
         if kind == "login":
-            return self.hub.login(platforms[0] if platforms else None, account)
+            extra = json.loads(task.get("result") or "{}")
+            return self.hub.login(platforms[0] if platforms else None, account,
+                                  timeout=extra.get("timeout", 600),
+                                  on_captcha=extra.get("on_captcha"))
         if kind == "assist":
             extra = json.loads(task.get("result") or "{}")
             return self.hub.assist_open(platforms[0] if platforms else None,

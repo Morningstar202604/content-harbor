@@ -186,12 +186,30 @@ def test_local_review_accepts_labeled_code_block():
     assert r["verdict"] == "pass"
 
 
-@pytest.mark.parametrize("ph", ["TODO", "FIXME", "XXX", "lorem ipsum",
-                                "{{name}}", "PLACEHOLDER"])
+@pytest.mark.parametrize("ph", ["TODO", "FIXME", "XXX", "lorem ipsum", "PLACEHOLDER"])
 def test_local_review_rejects_placeholders(ph):
+    """正文里的明显占位符（TODO/FIXME/lorem ipsum/placeholder）被 reject。
+
+    回归：旧的检测器把 `{{ }}` 也当占位符，导致任何 Python f-string / Jinja / CSS 文章
+    一跑就拒发（技术文档误报）。修复后只拦明确的人工标记，合法模板语法放行。
+    """
     r = gate._local_review("标题", LONG_SAFE + f" {ph} ")
     assert r["verdict"] == "reject"
     assert any("占位符" in i for i in r["issues"])
+
+
+def test_local_review_ignores_template_braces():
+    """`{{ }}` 不在占位符黑名单里：合法模板语法不被误报。"""
+    content = LONG_SAFE + "\n\nJinja 例子：`{{ name }}`，Python f-string: `{{ f'{x}' }}`"
+    r = gate._local_review("标题", content)
+    assert r["verdict"] == "pass", r["issues"]
+
+
+def test_local_review_placeholder_inside_code_block_ignored():
+    """代码块内的 `TODO` 不当作占位符残留（注释里的 TODO 完全合法）。"""
+    content = LONG_SAFE + "\n\n```python\n# TODO: 这里可以优化\nprint(1)\n```"
+    r = gate._local_review("标题", content)
+    assert r["verdict"] == "pass", r["issues"]
 
 
 def test_dual_review_uses_local_when_no_review_model():

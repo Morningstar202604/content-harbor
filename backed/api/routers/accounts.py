@@ -2,12 +2,31 @@
 """账号 / 平台端点：登录 / 登出 / 诊断 / 验证码 / 辅助操作 / 刷新。"""
 
 
+import re
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..deps import get_hub
 
 router = APIRouter()
+
+# 平台/账号名只能小写字母数字下划线短横。拒绝 `..` 或路径分隔符，
+# 避免 `/accounts/../../etc` 之类的拼接到 PROFILE_ROOT / ".."_default
+# 上，把 shutil.rmtree 变成删任意目录。
+_SAFE_NAME = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _check_platform(platform: str) -> str:
+    if not _SAFE_NAME.match(platform or ""):
+        raise HTTPException(400, "platform 只能含小写字母数字下划线短横，且长度 1-64")
+    return platform
+
+
+def _check_account(account: str) -> str:
+    if not _SAFE_NAME.match(account or ""):
+        raise HTTPException(400, "account 只能含小写字母数字下划线短横，且长度 1-64")
+    return account
 
 
 class LoginIn(BaseModel):
@@ -45,39 +64,51 @@ def accounts():
 
 @router.get("/accounts/{platform}/check")
 def check_account(platform: str, account: str = "default"):
+    _check_platform(platform)
+    _check_account(account)
     return {"platform": platform, "logined": get_hub().check(platform, account)}
 
 
 @router.post("/accounts/{platform}/login")
 def login(platform: str, body: LoginIn):
     """异步启动登录：提交任务，轮询 GET /tasks/{task_id}。"""
-    task_id = get_hub().tasks.submit("login", platforms=[platform], account=body.account)
+    _check_platform(platform)
+    _check_account(body.account)
+    task_id = get_hub().tasks.submit(
+        "login", platforms=[platform], account=body.account,
+        timeout=body.timeout, on_captcha=body.on_captcha)
     return {"task_id": task_id, "platform": platform, "status": "pending",
             "poll": f"/tasks/{task_id}"}
 
 
 @router.delete("/accounts/{platform}")
-def logout(platform: str):
+def logout(platform: str, account: str = "default"):
     """清除登录态：删 profile + cookie 快照，账号状态置离线。"""
-    r = get_hub().logout(platform)
+    _check_platform(platform)
+    _check_account(account)
+    r = get_hub().logout(platform, account)
     return {"ok": True, **r}
 
 
 @router.get("/accounts/{platform}/diagnose")
 def diagnose(platform: str):
     """这个平台该怎么接、验证码怎么过——排查用。"""
+    _check_platform(platform)
     return get_hub().diagnose(platform)
 
 
 @router.post("/accounts/{platform}/solve-captcha")
 def solve_captcha(platform: str, body: CaptchaIn):
     """打开页面就地处理验证码：先半自动试，不行转人工。"""
+    _check_platform(platform)
+    _check_account(body.account)
     return get_hub().solve_captcha(platform, body.account, body.wait)
 
 
 @router.post("/accounts/{platform}/assist")
 def assist_open(platform: str, body: AssistIn):
     """带登录态的内置有头浏览器打开平台页（人工步骤接管）。"""
+    _check_platform(platform)
     if not body.url.startswith(("http://", "https://")):
         raise HTTPException(422, "url 必须是 http(s) 地址")
     task_id = get_hub().tasks.submit("assist", platforms=[platform], url=body.url)
@@ -86,6 +117,7 @@ def assist_open(platform: str, body: AssistIn):
 
 @router.post("/refresh/{platform}")
 def refresh(platform: str, limit: int = 50):
-    """异步抓取平台文章入库。"""
-    task_id = get_hub().tasks.submit("refresh", platforms=[platform])
+    """异步抓取平台文章入库。limit 传入 TaskManager，避免被 dispatch 硬编码为 50。"""
+    _check_platform(platform)
+    task_id = get_hub().tasks.submit("refresh", platforms=[platform], limit=limit)
     return {"task_id": task_id, "status": "pending", "poll": f"/tasks/{task_id}"}

@@ -109,6 +109,10 @@ def _local_review(title: str, content: str) -> dict:
     """本地 heuristic 二审（无外网也能跑，作为底线）。
 
     查：代码块是否标语言 / 是否含占位符 / 篇幅是否过短 / 是否含 TODO 残留。
+
+    占位符检测只在代码块**外**的正文里找：代码块里的 ``{{ }}``
+    常是合法的 Jinja / Python f-string / JSON / CSS，旧实现一律命中就误报，
+    技术文档一跑就 reject。
     """
     issues = []
     if len(content.strip()) < 200:
@@ -116,22 +120,29 @@ def _local_review(title: str, content: str) -> dict:
     # 代码块语言标注（2026-09-21 修复：原正则把闭栏 ``` 也当开栏检查，
     # 导致所有带代码块的文章都被误判"未标语言"——闭栏永远不带语言）
     in_block = False
+    prose_lines = []     # 代码块外的正文行，占位符只在这里找
     for line in content.split("\n"):
         s = line.strip()
-        if not s.startswith("```"):
+        if s.startswith("```"):
+            if not in_block:
+                if s == "```":          # 开栏且裸栏 = 未标语言
+                    issues.append("存在未标语言的代码块")
+                    break
+                in_block = True
+            else:
+                in_block = False        # 闭栏
             continue
         if not in_block:
-            if s == "```":          # 开栏且裸栏 = 未标语言
-                issues.append("存在未标语言的代码块")
-                break
-            in_block = True
-        else:
-            in_block = False        # 闭栏
-    # 占位符残留
-    for placeholder in ("TODO", "FIXME", "XXX", "lorem ipsum", "placeholder", "{{", "}}"):
-        if placeholder.lower() in content.lower():
+            prose_lines.append(line)
+    prose = "\n".join(prose_lines).lower()
+    # 占位符残留（仅正文）
+    for placeholder in ("TODO", "FIXME", "lorem ipsum", "placeholder"):
+        if placeholder.lower() in prose:
             issues.append(f"含占位符残留: {placeholder}")
             break
+    # XXX 单独处理：避免命中 xxx 邮箱、路径变量等
+    if re.search(r"\bXXX+\b", content, re.I):
+        issues.append("含占位符残留: XXX")
     ok = not issues
     return {"verdict": "pass" if ok else "reject",
             "issues": issues, "reviewer": "local-heuristic"}

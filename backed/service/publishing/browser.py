@@ -60,7 +60,10 @@ def _bw_worker(q):
         fn, args, kwargs, box, ev = task
         try:
             box["r"] = fn(*args, **kwargs)
-        except BaseException as e:
+        except Exception as e:
+            # 只捕 Exception，不捕 BaseException：
+            # KeyboardInterrupt / SystemExit 属于中断，
+            # 不应作为普通异常回传给调用方，否则 daemon 线程里 Ctrl-C 会被吞掉。
             box["e"] = e
         finally:
             ev.set()
@@ -571,9 +574,10 @@ class BuiltinBrowser:
         # 有头模式在 Linux 上需要 X Server，没有就自动起 Xvfb
         if not self.headless:
             self.display = ensure_display()
-            if self.display is False:
-                # 有头模式需要真实显示（DISPLAY 或 Xvfb）；
-                # Win/mac 真桌面返回 True（可用），Linux 无 X 返回 False（降级无头）
+            # ensure_display 返回 True（Win/Mac）、str（display 名）或 None（Linux 无 X），
+            # 永不会返回 False。因此判断要用 `not self.display` 而不是 `is False`：
+            # 旧写法 `is False` 是死代码，Linux 无 X 时会尝试 headful launch 导致报错不可读。
+            if not self.display:
                 print("[warn] 没找到可用的显示（DISPLAY/Xvfb），有头模式不可用，"
                       "已降级为无头。登录请在有桌面的机器上做，或装：apt install xvfb")
                 self.headless = True

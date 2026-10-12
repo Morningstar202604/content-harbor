@@ -93,6 +93,16 @@ class Hub:
         """实例疑似崩了：踢出池关掉（委托 BrowserPoolManager）。"""
         return self._browser_pool._drop(platform, account)
 
+    def _busy_for(self, platform, account):
+        """取（或建）per-key 互斥锁（委托 BrowserPoolManager）。
+
+        回归：0.7.0 中登录/检查/验证码/辅助/发布路径都用
+        `with self._busy_for(...)` 包住浏览器操作，但 Hub 从未定义过这个方法
+        ——只有 BrowserPoolManager 有。一运行到登录就
+        `AttributeError: 'Hub' object has no attribute '_busy_for'`。
+        """
+        return self._browser_pool._busy_for(platform, account)
+
     def close_all(self):
         """进程退出前关浏览器 + 停调度器 + 关任务引擎（atext 兜底）。"""
         try:
@@ -663,10 +673,27 @@ class Hub:
             raise
 
     def update(self, article_id, platforms=None, account="default"):
-        """原地更新：打开各平台的编辑页改内容，改完就是更新，不是新发一篇。"""
+        """原地更新：打开各平台的编辑页改内容，改完就是更新，不是新发一篇。
+
+        AIGC 合规（补 F-18）：update 路径同样需过安全检查。
+        旧实现只走 publish 过闸，AI 改写后直接 update 会把 AI 内容同步到
+        已上线平台，绕过《AIGC 标识办法》与高危词扫描。
+        这里补一个简化闸：
+          - 内容安全扫描永远开（与 publish 一致）
+          - AI 源文章强制打 AIGC 标识
+          - 不过 draft_only 闸门（update 是同步变更到已上线发布，不是首次上线）
+        """
         art = self.get(article_id)
         if not art:
             raise ValueError(f"文章 {article_id} 不存在")
+        # --- AIGC 合规门禁（与 publish 共享安全检查）---
+        if aigc_gate.is_enabled():
+            dangerous = aigc_gate.scan_dangerous(art.get("content_md", ""), art.get("title", ""))
+            if dangerous:
+                raise ValueError(f"合规门禁拒绝同步: 高危内容 {dangerous}")
+            # AI 源文章补上 AIGC 标识（幂等）
+            if aigc_gate.is_ai_sourced(art):
+                art = aigc_gate.add_aigc_label(art, art.get("ai_model", ""))
         pubs = db.get_publications(self.conn, article_id=article_id)
         if platforms:
             pubs = [p for p in pubs if p["platform"] in platforms]

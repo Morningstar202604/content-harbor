@@ -2,6 +2,67 @@
 
 ---
 
+## [0.7.0] - 2026-10-12
+
+> 主题：**全仓审查 + 修复 0.7.0 拆分引入的运行时缺陷 + 补 AIGC 合规门禁缺口**。
+> 测试用例 299 → 330。
+
+### 新增：全仓代码审查与回归测试
+
+审查员逐文件通读 `backed/` 全部 Python 源码（~14,800 行），产出
+`review-findings.md`（29 条发现，含 A/B/C/D/E 五类定级）。本轮修复 14 条
+关键缺陷，新增 `backed/tests/test_review_20261012.py`（31 用例）锁定所有修复。
+
+### 修复（运行时缺陷）
+
+- **F-29 `Hub._busy_for` 从未定义**：`service.py` 里 5 处 `with self._busy_for(...)`
+  但 Hub 从未定义这个方法——只有 `BrowserPoolManager` 有。一运行到登录/检查/验证码
+  路径就 `AttributeError`。这是 0.7.0 拆分引入的**必炸点**，现有 298 测试因走
+  StubHub/DEMO 模式从未触发。已在 Hub 里补 `_busy_for` 委托。
+- **F-05/F-06 `TaskManager._dispatch` 丢参数**：login 的 `timeout`/`on_captcha`、
+  refresh 的 `limit` 全部被 API 层接收但 dispatch 硬编码丢弃，`LoginIn.timeout` 传了无效。
+  现在从 `task.result` 读出来传给 hub 方法。
+- **F-07 路径穿越**：`/accounts/{platform}/check`、`/accounts/{platform}/login` 等端点
+  未校验 platform/account，攻击者传 `..` 或 `../../etc` 可以拼到 profile 路径上，
+  触发 `shutil.rmtree` 删任意目录。所有账号端点加正则校验 `^[a-zA-Z0-9_-]{1,64}$`。
+- **F-18/F-26 AIGC 门禁缺口**：`hub.update()` / `hub.sync_pending()` 完全不过
+  `aigc_gate.apply_gate_before_publish`，AI 改写后直接同步上线绕过《AIGC 标识办法》。
+  现在 update 也过安全扫描 + AI 源打 AIGC 标识。
+- **F-13 占位符误报**：`gate._local_review` 把 `{{ }}` 当占位符，任何 Python f-string /
+  Jinja / CSS 技术文档一跑就 reject。移出黑名单，占位符检测只在代码块外的正文做。
+- **F-02 连接泄漏**：`_webhook_store.init(conn)` 自建 conn 后不 close，register/list_all
+  每次调用泄漏一个 sqlite 连接。加 try/finally。
+- **F-03 arity bug**：`ArticleStore.edit` 里 `get_pending_updates(conn, article_id)`
+  实际只接受 1 个参数，一旦真被调用就 TypeError。删掉这行。
+- **F-12 误发事件**：`_run_task` retry 分支也调 `on_task_complete`，把 retry 当完成发事件。
+  只有 fail/human 终态才 emit。
+- **F-24 吞中断**：`browser._bw_worker` 捕获 `BaseException`，把 `KeyboardInterrupt` /
+  `SystemExit` 当普通异常吞掉。改成 `except Exception`。
+- **F-25 死代码**：`BuiltinBrowser.start()` 用 `self.display is False` 判断，
+  `ensure_display()` 从不返回 False，Linux 无 X 时不会降级到 headless。改成 `not self.display`。
+
+### 清理
+
+- **F-01 `check_all.ps1` 死锁 bug**：scriptblock 里的 `exit 1` 会终止整个 pwsh 进程
+  而不是回到 try/catch，ruff 一红 4 步只跑 1 步，汇总行也打不出来。改成 `throw`。
+- **F-10 死代码**：删除 `api/__init__.py::register_routers`（挂 `/api/hub` 但从未被调用，
+  实际入口是 `api.hub.register_hub` 挂 `/api/v1/hub`）。
+- **F-11 版本号**：`api/hub.py` 独立 app 的 version 从 0.2.0 更新到 0.7.0。
+- **ruff F401**：清理 3 处未使用 import（`_webhook_store.time`、`urllib.request`、`crypto.base64`）。
+
+### 新增测试
+
+- **`test_review_20261012.py`（31 用例）** — 锁定本轮所有修复：
+  平台名路径穿越防护（6 例）、dispatch 参数传递（2 例）、retry 不发完成事件（2 例）、
+  AIGC 门禁 update 路径（2 例）、代码级断言（8 例）、占位符检测（4 例）。
+- **`test_gate.py` 更新**：删除 `{{name}}` 占位符回归用例，新增模板语法不误报
+  与代码块内 TODO 不误报的回归锁定。
+
+### 门禁
+
+`check_all.ps1` 四道全绿：compileall / ruff / pytest / vite build。
+
+
 ## [0.6.5] - 2026-10-10
 
 > 主题：**给零覆盖的高风险区补测试，并修掉测试挖出的限流绕过漏洞**。

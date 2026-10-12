@@ -1,17 +1,16 @@
-"""API 路由包：聚合各版本路由并挂载到应用。"""
+"""API 路由包：聚合各版本路由并挂载到应用。
 
-from fastapi import FastAPI
+注：`register_hub`（挂 `/api/v1/hub`）在 `api/hub.py` 里，才是实际入口。
+本模块只保留 `hub_router` 导出（供 `app/routes.py` 列举路由信息）。
+旧版 `register_routers`（挂 `/api/hub`、未版本化）已因与 `register_hub` 不一致
+而删掉，避免使用者以为 prefix 可配置但实际写死 `/api/v1/hub`。
+"""
 
-from config import settings
-from .hub import hub_router
+from fastapi import FastAPI  # noqa: F401  (re-exported for API compat)
 
-__all__ = ["hub_router", "register_routers", "get_router_info"]
+from .hub import hub_router  # noqa: F401  (exported)
 
-
-def register_routers(app: FastAPI) -> None:
-    """将平台发布路由挂载到配置指定的 API 前缀（默认 /api/hub）。"""
-    prefix = getattr(settings, "api_prefix", "/api/hub")
-    app.include_router(hub_router, prefix=prefix)
+__all__ = ["hub_router", "get_router_info"]
 
 
 def get_router_info() -> dict:
@@ -26,6 +25,6 @@ def get_router_info() -> dict:
             }
         )
     return {
-        "prefix": getattr(settings, "api_prefix", "/api/hub"),
+        "prefix": "/api/v1/hub",  # 与 register_hub 保持一致
         "routes": routes,
     }

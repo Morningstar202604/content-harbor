@@ -8,7 +8,6 @@
     配合业务层的"配置失效 → 提示用户重配"逻辑实现平滑轮换。
 """
 
-import base64
 import os
 from pathlib import Path
 
