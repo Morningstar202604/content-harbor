@@ -179,11 +179,9 @@ class Hub:
                         br.export_auth()
                     except Exception:
                         pass
-                # 登录态正常但页面在弹验证码，说明"能登但不一定能操作"，得告诉用户
-                if ok and CaptchaPolicy.detect(page):
-                    db.upsert_account(self.conn, platform, account, str(br.profile_dir),
-                                      "logined")
-                    return ok
+                # F-16 简化：合并 3 处重复的 upsert_account 为 1 处。
+                # 即使弹验证码（CaptchaPolicy.detect），登录态本身仍有效，
+                # 统一写 "logined"；未登录才写 "offline"。
                 db.upsert_account(self.conn, platform, account, str(br.profile_dir),
                                   "logined" if ok else "offline")
                 return ok
@@ -379,6 +377,12 @@ class Hub:
                                                      "Session closed", "浏览器启动失败",
                                                      "Cannot switch to a different thread",
                                                      "greenlet")):
+                            # F-17：不再静默吞错——打 warning 记录具体错误类型与堆栈，
+                            # 方便事后排查“为什么这个平台的浏览器崩了”。
+                            import logging as _logging
+                            _logging.getLogger(__name__).warning(
+                                "浏览器实例崩溃，踢出池重建 (%s/%s): %s: %s",
+                                platform, account, type(e).__name__, str(e)[:200])
                             self._drop(platform, account)
                             continue
                         raise
