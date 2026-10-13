@@ -26,7 +26,7 @@
 
   "platforms": {
     "cnblogs": {
-      "_说明": "纯协议接入（XML-RPC），推荐一条命令自动填充：python cli.py --headed bootstrap-cnblogs --username 登录名 --password 密码",
+      "_说明": "纯协议接入（XML-RPC），推荐一条命令自动填充：cd backed && uv run python -m backed.cli --headed bootstrap-cnblogs --username 登录名 --password 密码",
       "endpoint": "https://rpc.cnblogs.com/metaweblog/你的博客地址名",
       "username": "你的登录用户名",
       "token": "MetaWeblog 访问令牌（不是登录密码，登录密码无效）"
@@ -44,15 +44,15 @@
       "password": "你的登录密码"
     },
 
-    "_浏览器类平台_说明": "以下 8 个平台均走 Playwright 浏览器登录态，登录一次即可（扫码/账密），登录态自动保存到 data/profiles/ 目录，config.json 里不需要填任何字段。用法：python cli.py --headed login --platform <平台名>",
+    "_浏览器类平台_说明": "以下 7 个平台均走 Playwright 浏览器登录态，登录一次即可（扫码/账密），登录态自动保存到 data/profiles/ 目录，config.json 里不需要填任何字段。用法：cd backed && uv run python -m backed.cli --headed login --platform <平台名>",
     "_浏览器类平台_列表": {
-      "juejin": "python cli.py --headed login --platform juejin   # 掘金（扫码或手机号短信）",
-      "csdn":   "python cli.py --headed login --platform csdn     # CSDN（账密或微信扫码）",
-      "zhihu":  "python cli.py --headed login --platform zhihu    # 知乎（扫码，发布后自动抓文章ID）",
-      "segmentfault": "python cli.py --headed login --platform segmentfault  # 思否（账密）",
-      "bilibili": "python cli.py --headed login --platform bilibili   # B站（扫码，仅草稿，发表需到编辑页二次选分区）",
-      "toutiao":  "python cli.py --headed login --platform toutiao    # 头条号（扫码，标题限30字）",
-      "oschina":  "python cli.py --headed login --platform oschina    # 开源中国（账密，UEditor富文本）"
+      "juejin": "cd backed && uv run python -m backed.cli --headed login --platform juejin   # 掘金（扫码或手机号短信）",
+      "csdn":   "cd backed && uv run python -m backed.cli --headed login --platform csdn     # CSDN（账密或微信扫码）",
+      "zhihu":  "cd backed && uv run python -m backed.cli --headed login --platform zhihu    # 知乎（扫码，发布后自动抓文章ID）",
+      "segmentfault": "cd backed && uv run python -m backed.cli --headed login --platform segmentfault  # 思否（账密）",
+      "bilibili": "cd backed && uv run python -m backed.cli --headed login --platform bilibili   # B站（扫码，仅草稿，发表需到编辑页二次选分区）",
+      "toutiao":  "cd backed && uv run python -m backed.cli --headed login --platform toutiao    # 头条号（扫码，标题限30字）",
+      "oschina":  "cd backed && uv run python -m backed.cli --headed login --platform oschina    # 开源中国（账密，UEditor富文本）"
     },
 
     "_平台能力矩阵": {
