@@ -38,8 +38,10 @@ export const useTaskStore = defineStore('task', {
     // SSE 长连接：后端推送新事件时更新 tasks
     connectSSE() {
       if (this._es) return
-      // EventSource 不支持自定义 header，baseURL 由拦截器处理
-      const base = window.__TAURI_PORT__ ? `http://127.0.0.1:${window.__TAURI_PORT__}/api/hub` : '/api/hub'
+      // EventSource 不支持自定义 header，baseURL 必须与后端实际路由对齐：/api/v1/hub
+      const base = window.__TAURI_PORT__
+        ? `http://127.0.0.1:${window.__TAURI_PORT__}/api/v1/hub`
+        : '/api/v1/hub'
       this._es = new EventSource(`${base}/events/stream`)
       this._es.onmessage = (ev) => {
         try {

@@ -5,7 +5,7 @@ import { useHubStore } from '@/stores/hub'
 // 平台首字母 badge
 const PLAT_MARKS = {
   zhihu: '知', bilibili: 'B', cnblogs: '博', csdn: 'C', metaweblog: '站',
-  juejin: '掘', oschina: '开', segmentfault: '思', toutiao: '头'
+  juejin: '掘', oschina: '开', segmentfault: '思', toutiao: '头', wuyi_cto: 'CTO'
 }
 
 // 平台可选分类选项
