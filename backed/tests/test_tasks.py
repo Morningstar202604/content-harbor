@@ -131,11 +131,14 @@ def test_network_error_retries_then_fails(tm):
     ("ValueError: 未知任务类型: bogus", 2, "fail"),
     ("RuntimeError: 登录已失效，请重新登录", 1, "human"),
     ("ConnectionResetError: econnreset", 1, "retry"),
+    # F-20 新增：合规门禁 422 是确定性错误，不重试
+    ("HTTPException: 422: 合规门禁拒绝发布", 1, "fail"),
+    ("HTTPException: 422: 安全扫描命中高危内容", 1, "fail"),
 ])
 def test_triage_rules(tm, err, attempts, expected):
-    """F-20: 未分类错误第 1 次 retry，第 2 次 fail。"""
-    action, _reason = tm._triage("publish", err, attempts)
-    assert action == expected
+    """F-20: 未分类错误第 1 次 retry，第 2 次 fail；合规门禁 422 立即 fail。"""
+    action, reason = tm._triage("publish", err, attempts)
+    assert action == expected, f"{err!r} attempts={attempts} → {action} (expected {expected}): {reason}"
 
 
 def test_triage_retry_gives_up_after_max_attempts(tm):

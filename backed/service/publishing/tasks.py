@@ -201,12 +201,17 @@ class TaskManager:
                                         extra.get("url", ""), account=account)
         raise ValueError(f"未知任务类型: {kind}")
 
+    # 永久失败关键词：命中就立即 fail，不重试（重试也不会改变结果）。
+    PERMANENT_HINTS = (
+        "合规门禁", "422", "门禁拒绝", "安全扫描", "高危内容",
+    )
+
     def _triage(self, kind, err, attempts):
         """确定性失败分诊。返回 (action, reason)。
 
-        F-20 改进：未分类错误在第 1 次尝试时给一次自动重试机会，
-        降低“操作太快被限流”等瞬态问题被永久 fail 的概率。
-        第 2 次仍未分类则永久 fail（不无限重试）。
+        优先级：HUMAN > RETRY > PERMANENT > 未分类（重试一次→fail）。
+        F-20 改进：未分类错误第 1 次给一次自动重试机会。
+        新增 PERMANENT_HINTS：合规门禁拒绝 / 422 等确定性错误立即 fail，不浪费重试。
         """
         low = (err or "").lower()
         for h in self.HUMAN_HINTS:
@@ -217,6 +222,10 @@ class TaskManager:
                 if attempts < self.MAX_ATTEMPTS:
                     return "retry", "网络/临时错误，自动重试"
                 return "fail", f"重试 {self.MAX_ATTEMPTS} 次仍失败"
+        # 永久错误：合规门禁 / 4xx 客户端错误，重试也不会变
+        for h in self.PERMANENT_HINTS:
+            if h.lower() in low:
+                return "fail", f"确定性错误（{h}），不再重试"
         # 未分类错误：第一次给一次重试机会，第二次永久 fail
         if attempts < 2:
             return "retry", "未分类错误，自动重试一次"
