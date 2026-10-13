@@ -44,8 +44,11 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(obs, "EVENT_LOG", data / "observability" / "events.log")
     monkeypatch.setattr(obs, "_event_logger", _NullLogger())
 
-    # webhook 派发线程是模块导入时拉起来的守护线程，测试里不发真实 HTTP
+    # webhook 派发线程：testing 中 stop 兜底（F-15 后由 init_events 显式启动）
     events.stop_dispatcher()
+    # 确保测试不读 config.json 里的 api_token（防止本地创建 config.json 后 401 把 REST 测试打挂）
+    import api.auth as _auth_mod
+    monkeypatch.setattr(_auth_mod, "_api_token", lambda: "")
 
     yield {"data": data, "db_file": db_file, "root": tmp_path}
 
