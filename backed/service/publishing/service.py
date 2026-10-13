@@ -541,6 +541,11 @@ class Hub:
                     "tag_category": tag_list[0] if tag_list else "",
                     "category": (ps.get("category") or "").strip() or None,
                     "summary": article.get("summary") or "",
+                    # 0.7.1 新增：发布设置面板选项（知乎话题/AI 辅助/活动等）
+                    "topics": (ps.get("topics") or "").strip(),
+                    "ai_assist": ps.get("ai_assist", False),
+                    "event": (ps.get("event") or "").strip(),
+                    "allow_comment": ps.get("allow_comment", True),
                 })
             r = self._with_adapter(platform, account, _do, page_hook=page_hook)
             # 体检 B1 修复（QA 标质力 2026-09-21）：适配器返回 error 键时

@@ -409,12 +409,15 @@ class ZhihuAdapter(PlatformAdapter):
         if not _click_exact(page, "发布"):
             self.verify_or_raise("发布", False,
                                  "写页上找不到「发布」按钮（不要退到「发布设置」）")
-        time.sleep(2)
+        time.sleep(3)
 
-        # 可能弹发布设置（首次发布弹开通/话题选择），有「确认/发布」就再点一次
-        # aqg: top-level boundary 二次确认弹窗是可选的，点不到不算失败
+        # ---- 发布设置面板：填话题 / AI 辅助声明 / 活动 / 评论权限 ----
+        self._fill_publish_settings(page, options)
+
+        # 填完后点「确认发布」/「发布」提交
+        # aqg: top-level boundary 确认按钮找不到不算失败（有些情况不弹面板）
         try:
-            _click_button(page, ["确认发布", "确定", "发布"], timeout=5000)
+            _click_button(page, ["确认发布", "确定", "发布"], timeout=8000)
         except Exception:
             pass
 
@@ -446,6 +449,93 @@ class ZhihuAdapter(PlatformAdapter):
             "edit_url": f"https://zhuanlan.zhihu.com/p/{post_id}/edit",
             "draft_only": False,
         }
+
+    # ---------------- 发布设置面板填写（0.7.1 新增） ----------------
+
+    def _fill_publish_settings(self, page, options):
+        """点「发布」后弹出的设置面板里自动填话题/AI 辅助/活动/评论权限。
+
+        知乎 UI 选择器不稳定（改版就挂），所以全部 try/except 降级：
+        填不上不算失败，只是留空让用户后续手动补。
+        """
+        topics = (options.get("topics") or "").strip()
+        ai_assist = options.get("ai_assist", False)
+        event = (options.get("event") or "").strip()
+        allow_comment = options.get("allow_comment", True)
+
+        # 1) 话题：知乎发布设置里有个「参与话题」输入框，输入后下拉选
+        if topics:
+            try:
+                topic_input = page.locator(
+                    'input[placeholder*="话题"], input[placeholder*="参与"], '
+                    '[class*="topic"] input, [class*="Topic"] input'
+                ).first
+                topic_input.wait_for(timeout=5000)
+                for t in topics.split(","):
+                    t = t.strip()
+                    if not t:
+                        continue
+                    topic_input.click()
+                    topic_input.fill(t)
+                    time.sleep(1)   # 等下拉加载
+                    # 选中第一个匹配项
+                    page.locator(
+                        f'[class*="dropdown"] [class*="item"]:has-text("{t}"), '
+                        f'[class*="suggestion"]:has-text("{t}")'
+                    ).first.click(timeout=3000)
+                    time.sleep(0.5)
+                    topic_input.fill("")   # 清空以便填下一个
+                import logging
+                logging.getLogger(__name__).info("知乎发布设置：已填话题 %s", topics)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "知乎话题填写失败（降级跳过）: %s", str(e)[:120])
+
+        # 2) AI 辅助创作声明：知乎 2026 新增的「AI 辅助」开关/复选框
+        if ai_assist:
+            try:
+                ai_toggle = page.locator(
+                    '[class*="ai"] [role="switch"], '
+                    'label:has-text("AI") input[type="checkbox"], '
+                    '[class*="ai-assist"] [class*="switch"], '
+                    'span:has-text("AI 辅助") ~ * input'
+                ).first
+                ai_toggle.wait_for(timeout=3000)
+                if not ai_toggle.is_checked():
+                    ai_toggle.click()
+                import logging
+                logging.getLogger(__name__).info("知乎发布设置：已勾选 AI 辅助声明")
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "知乎 AI 辅助开关未找到（降级跳过）: %s", str(e)[:120])
+
+        # 3) 参与活动：知乎有时有「参与活动」下拉/输入
+        if event:
+            try:
+                evt_input = page.locator(
+                    'input[placeholder*="活动"], [class*="event"] input'
+                ).first
+                evt_input.wait_for(timeout=3000)
+                evt_input.fill(event)
+                time.sleep(1)
+                page.locator(f'[class*="dropdown"]:has-text("{event}")').first.click(timeout=3000)
+                import logging
+                logging.getLogger(__name__).info("知乎发布设置：已参与活动 %s", event)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "知乎活动填写失败（降级跳过）: %s", str(e)[:120])
+
+        # 4) 评论权限：不允许评论时关开关
+        if not allow_comment:
+            try:
+                page.locator('label:has-text("评论") ~ * input, [class*="comment"] [role="switch"]').first.click(timeout=3000)
+                import logging
+                logging.getLogger(__name__).info("知乎发布设置：已关闭评论")
+            except Exception:
+                pass  # 默认允许评论，找不到开关就不动
 
     # ---------------- 原地更新 ----------------
 
