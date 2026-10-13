@@ -2,15 +2,15 @@
 
 ## 总览
 
-9 个平台适配器分两类，连接方式完全不同：
+10 个平台适配器分两类，连接方式完全不同：
 
 | 类型 | 平台 | 连接方式 | 登录态有效期 |
 |------|------|----------|-------------|
 | 纯协议 | **cnblogs** | 读 `config.json` 的 endpoint/username/token，XML-RPC 直连 | 永不过期 |
 | 浏览器 | csdn / juejin / zhihu / segmentfault / bilibili / toutiao / oschina |
-| 纯协议 | cnblogs / metaweblog | 配置一次，免扫码 | `python cli.py login --platform <名>` 扫码一次，Playwright 登录态存本地 profile | 长期（数周~数月，视平台） |
+| 纯协议 | cnblogs / metaweblog | 配置一次，免扫码 | `cd backed && uv run python -m backed.cli login --platform <名>` 扫码一次，Playwright 登录态存本地 profile | 长期（数周~数月，视平台） |
 
-统一发布入口：`python cli.py publish --id <文章ID> --platforms <逗号分隔>`。
+统一发布入口：`cd backed && uv run python -m backed.cli publish --id <文章ID> --platforms <逗号分隔>`。
 
 ---
 
@@ -42,14 +42,14 @@
 ### 2. 验证连接
 
 ```bash
-python cli.py check --platform cnblogs
+cd backed && uv run python -m backed.cli check --platform cnblogs
 # 输出 ✓ 已登录 即凭据有效
 ```
 
 ### 3. 发布
 
 ```bash
-python cli.py publish --id 4 --platforms cnblogs --draft
+cd backed && uv run python -m backed.cli publish --id 4 --platforms cnblogs --draft
 # 先草稿；确认无误后去掉 --draft 正式发布
 ```
 
@@ -67,7 +67,7 @@ python cli.py bootstrap-cnblogs --username <登录名> --password <登录密码>
 ### 1. 首次登录（每个平台各做一次）
 
 ```bash
-python cli.py login --platform juejin --headed
+cd backed && uv run python -m backed.cli login --platform juejin --headed
 # 弹出有头 Chromium，扫码/输密码登录
 # 登录态存到 data/profiles/<platform>/<account>/，之后 publish 自动复用
 ```
@@ -85,14 +85,14 @@ python cli.py login --platform juejin --headed
 ### 2. 检查登录态
 
 ```bash
-python cli.py check --platform juejin
+cd backed && uv run python -m backed.cli check --platform juejin
 # ✓ 已登录 / ✗ 未登录
 ```
 
 ### 3. 发布
 
 ```bash
-python cli.py publish --id 4 --platforms juejin,csdn --draft
+cd backed && uv run python -m backed.cli publish --id 4 --platforms juejin,csdn --draft
 # 多平台逗号分隔；--draft 只发草稿
 ```
 
@@ -120,10 +120,10 @@ python cli.py ai-write --topic "用 Python 实现一个轻量级任务调度器"
 # 输出：{"id": 5, ...}
 
 # 2. 人工确认内容无误后，发布到多个平台（草稿）
-python cli.py publish --id 5 --platforms cnblogs,juejin,csdn --draft
+cd backed && uv run python -m backed.cli publish --id 5 --platforms cnblogs,juejin,csdn --draft
 
 # 3. 确认后正式发布
-python cli.py publish --id 5 --platforms cnblogs,juejin,csdn
+cd backed && uv run python -m backed.cli publish --id 5 --platforms cnblogs,juejin,csdn
 ```
 
 > **合规门禁**：AI 源文章发布时自动强制 `draft_only=True`（人审闸门）。想正式上线须单独调 `publish(draft_only=False)`。
