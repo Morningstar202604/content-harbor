@@ -2,6 +2,70 @@
 
 ---
 
+## [Unreleased] - 2026-10-14
+
+> 主题：**审查收尾轮 —— 剩余低危项清零 + 本机凭据卫生 + README 损坏修复**。
+> 测试用例 333 → 339（新增 `test_review_20261014.py`，6 用例）。
+
+### 修复（审查剩余项）
+
+- **F-09 密钥文件权限**：`crypto.py` 新增 `_restrict_key_file()`——POSIX 保持 chmod 600；
+  Windows 改用 `icacls /inheritance:r /grant:r <user>:F` 去掉继承 ACE、只授权当前用户
+  （原实现 Windows 上 chmod 静默失败，Fernet 主密钥落盘时 Users 组可读）。
+  读取存量密钥时也顺手收紧；收紧失败只打 warning 不阻断密钥加载
+  （含 icacls 超时：TimeoutExpired 不是 OSError 子类，已显式兜住）。
+- **F-14 站内通知测试隔离**：`_event_notifier` 是模块级环形缓冲，跨测试会串——
+  `tests/conftest.py` 增加 autouse 夹具每个测试前清空；新增隔离顺序对锁定该行为。
+- **F-27 回滚无操作语义**：`versions.rollback()` 目标版本与当前内容相同时显式返回
+  「当前内容与版本 X 相同，无需回滚」——旧实现照常走两处 capture 被哈希去重跳过、
+  却返回"已回滚"，pre-rollback/rollback 两条记录全部落空，语义含混。
+  短路比对**含 tags**：只改标签的回滚不是 no-op（内容哈希不含 tags，否则标签回不去）。
+
+### 修复（文档）
+
+- **README.md 反引号损坏**：074ce0d「文档打磨」引入——全文 0x60 被替换为
+  `\`+`\b` 退格序列，12 处内联代码与 6 对代码围栏全部失效（GitHub/Gitee 上
+  代码块不渲染、正文出现游离反斜杠）。已按上下文逐行重建：41 个反斜杠 / 7 个
+  退格字节清零，反引号恢复 60 个；发布流程图补回顾围栏。
+- 用例数漂移：README/AGENT.md 的 331 → 339。
+- review-findings.md 状态同步：补记 F-15/16/17/20/28 已修 + 本轮 F-09/14/27。
+
+### 安全（本机操作，非仓库内容）
+
+- 本仓库 `.git/config` 里 gitcode remote 的明文密码剥离（保留用户名以维持凭据
+  查找），验证 credential helper 仍可解析、push 不受影响。
+- 全局 `credential.helper` 从 `store`（明文 `~/.git-credentials`，9 条凭据）
+  切到 `manager`（Windows 凭据管理器，vault 中已有 gitcode/github 条目）；
+  明文文件已删除。**gitcode 密码建议轮换**（曾多处落盘）。
+
+### 环境/部署债清理
+
+- **删除 `backed/requirements.txt`**：uv 迁移后已无任何引用（CI/Docker/脚本均
+  用 `uv sync` + `uv.lock`），且内容过期（还写着 `server/mcp_server.py` 的旧路径）。
+- **venv 与 lock 对齐**：`uv sync` 移除手工装入的 `web-publish`（git 源、
+  全仓零 import 的遗留物）；pip-audit 不再报 "Dependency not found on PyPI"。
+- **版本对齐**：`pyproject.toml`/`uv.lock` 的 0.6.5 → **0.7.0**（与 CHANGELOG、
+  `api/hub.py` 的 app version 一致；此前元数据落后一个版本）。
+- **CI 修复**（`.github/workflows/ci.yml`）：backend job 删掉从未使用的
+  pnpm/setup-node 三步（其 `cache-dependency-path: backed/pnpm-lock.yaml`
+  指向不存在的文件，会让 CI 直接红）；pip-audit 改为
+  `uv run --with pip-audit pip-audit --strict`（原写法往 venv 里 pip install，
+  且 `|| true` 与 continue-on-error 双重吞错）。
+- **deploy/ 修复**（此前容器根本起不来）：
+  - `nginx.conf`：删除 Python 文档字符串行、`limit_req_zone` 移到 http 级
+    （原位置 server{} 内 = [emerg] 启动失败）、补 SPA `try_files` 回落、
+    `/api/` 反代 + SSE `proxy_buffering off`，`/` 不再整站反代后端；
+  - `Dockerfile`：`uvicorn start:app` → `python start.py`（start.py 模块级
+    没有 `app`，原 CMD 必 AttributeError）；基础镜像 3.11 → 3.12（对齐 CI/本地）；
+  - `Dockerfile.web` + `docker-compose.yml`：web 构建上下文改回仓库根
+    （原 context ../web + dockerfile deploy/... 让 Dockerfile 落在上下文之外）；
+  - 新增 `.dockerignore`（此前构建上下文会把 `.venv`/`node_modules`/`backed/data`
+    全量上传 daemon；并显式排除 `backed/service/data` 登录快照与 `backed/config.json`
+    这类含凭据的本地文件，防被 COPY 进镜像）；
+  - compose healthcheck `/api/hub/health` → `/health`（前者 404，容器永远 unhealthy）。
+
+---
+
 ## [0.7.0] - 2026-10-12
 
 > 主题：**全仓审查 + 修复 0.7.0 拆分引入的运行时缺陷 + 补 AIGC 合规门禁缺口**。

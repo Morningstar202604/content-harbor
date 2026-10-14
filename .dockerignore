@@ -1,0 +1,32 @@
+# Docker 构建上下文瘦身（context 为仓库根，deploy/ 与 web/ 两个镜像共用）
+# 目标：不上传本地虚拟环境 / 依赖目录 / 运行数据 / 构建产物到 daemon。
+
+.git
+.github
+.aqg
+.zwork
+.meituan-catpaw
+.ruff_cache
+**/__pycache__
+*.pyc
+
+# 后端
+backed/.venv
+backed/data
+backed/service/data
+backed/config.json
+backed/.env
+backed/logs
+backed/.pytest_cache
+backed/.ruff_cache
+
+# 前端
+web/node_modules
+web/dist
+web/src-tauri/target
+web/src-tauri/binaries
+server/static
+
+# 其他
+docs/screenshots
+*.log

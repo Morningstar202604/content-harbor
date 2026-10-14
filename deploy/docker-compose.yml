@@ -34,7 +34,7 @@ services:
       - hub_data:/app/backed/data
     networks: [app-net]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/hub/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -42,7 +42,10 @@ services:
   web:
     profiles: ["web"]
     build:
-      context: ../web
+      # 上下文必须含 Dockerfile 本身：用仓库根 + deploy/ 下的路径（旧写法
+      # context ../web + dockerfile deploy/*.web 让目标文件落在上下文之外，
+      # 传统 builder 直接拒绝构建）
+      context: ..
       dockerfile: deploy/Dockerfile.web
     container_name: ach-web
     restart: unless-stopped

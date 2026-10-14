@@ -455,3 +455,40 @@ except Exception:
 4. 修 C 类里低风险高收益的（F-10, F-11, F-12）
 5. D 类补 F-18（update/sync 过门禁）
 6. E 类写 CHANGELOG 0.7.0 条目 + 更新 AGENT.md
+
+---
+
+## 收尾轮（2026-10-14）—— 逐条复核实况 + 剩余项清零
+
+> 本轮先把 29 条逐条对代码复核（不照抄旧清单），再修真正剩余项。
+> 复核发现多条已在后续提交中修复但未回填本文件，一并补记。
+
+### 复核更正：原清单里"未修"但实际已修（带代码证据）
+
+| 编号 | 实况 | 证据 |
+|---|---|---|
+| F-04 | 已消除 | `self.articles = ArticleStore(...)` 赋值已摘除（service.py:71 处只留注释）；ArticleStore 模块本体成死文件，见下方剩余项 |
+| F-08 | 已修 | discover 的辅助入口已接线 SSRF 校验：`accounts.py:144` `_check_url_safety(body.url)`（IP 段判定 + 域名黑名单 + `ASSIST_ALLOW_LOCAL` 豁免） |
+| F-15 | 已修 | `events.py:237` 派发线程改由 `init_events()` 显式启动，Hub 构造时调用（service.py:55）；conftest 里 `stop_dispatcher()` 兜底 |
+| F-16 | 已修 | `check()` 的 3 处 upsert_account 合并为 1 处（service.py:182 带 F-16 注释） |
+| F-17 | 已修 | `_with_adapter` 崩溃分支不再静默：记录错误类型与堆栈后 drop 重建（service.py:380-387，带 F-17 注释） |
+| F-20 | 已修 | `_triage` 增加 PERMANENT_HINTS（合规门禁/422 立即 fail）+ 未分类错误首次给一次重试（tasks.py:204-232） |
+| F-28 | 已修 | `load_style` 降级路径打 logging warning（ai.py:99-107，带 F-28 注释） |
+
+### 本轮新修
+
+| 编号 | 状态 | 修了什么 | 锁定测试 |
+|---|---|---|---|
+| F-09 | 修 | crypto.py 新增 `_restrict_key_file()`：Windows 用 `icacls /inheritance:r /grant:r <user>:F` 收紧 Fernet 主密钥 ACL（存量密钥读取时也收紧；失败只 warning） | test_review_20261014.py 3 例 |
+| F-14 | 修 | conftest 增加 autouse 清空夹具；隔离顺序对（写→读空）锁定行为 | test_review_20261014.py 2 例 |
+| F-27 | 修 | `rollback()` 目标版本与当前内容相同 → 显式「无需回滚」短路，不再静默跳过全部记录 | test_review_20261014.py 1 例 |
+
+**测试**：新增 `backed/tests/test_review_20261014.py` 6 个用例（RED 5 failed/1 passed → GREEN 6/6）。总用例 333 → 339。
+
+### 剩余项（不修，知情即可）
+
+| 项 | 说明 | 处置 |
+|---|---|---|
+| ~~`article_store.py` 死模块~~ | **已删除**（2026-10-14）：`test_review_20261012.py` 的 F-03 用例与 import、AGENT.md 结构行同步移除；删除后全量 338 用例通过 | 完成 |
+| 本机 `~/.git-credentials` | 全局 credential.helper=store 导致 9 条凭据明文落盘（gitcode×2 / gitee×2 / github×5），非仓库内容 | **已处置**：helper 切 manager + 明文文件删除；gitcode 密码建议轮换 |
+| 前端零测试 | 只有 vite 构建门禁（本文件"尚未审查"一节同样覆盖不到前端行为） | 需要引入测试框架（新依赖决策），另行立项 |

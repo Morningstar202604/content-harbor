@@ -3,7 +3,6 @@
 
 覆盖：
 - F-02 _webhook_store.init 自建 conn 后 close
-- F-03 ArticleStore.edit 不再调 get_pending_updates 传错参
 - F-05 login 任务的 timeout/on_captcha 不再丢
 - F-06 refresh 任务的 limit 不再丢
 - F-07 platform/account 路径穿越防护
@@ -27,7 +26,6 @@ from service.publishing import _webhook_store as _wh
 from service.publishing import gate as aigc_gate
 from service.publishing import service as service_mod
 from service.publishing import browser as br_mod
-from service.publishing.article_store import ArticleStore
 from service.publishing.tasks import TaskManager
 
 
@@ -288,20 +286,6 @@ def test_webhook_store_init_has_finally_close():
     src = inspect.getsource(_wh.init)
     assert "finally:" in src
     assert "close()" in src
-
-
-def test_article_store_edit_no_arity_bug():
-    """F-03: ArticleStore.edit 不再调 get_pending_updates。"""
-    src = inspect.getsource(ArticleStore.edit)
-    # 跳过开头的 docstring：找第一段三引号到第二段三引号之间的内容
-    triple = '"' * 3
-    first = src.find(triple)
-    if first >= 0:
-        second = src.find(triple, first + 3)
-        body = src[second + 3:] if second >= 0 else src
-    else:
-        body = src
-    assert "get_pending_updates" not in body
 
 
 def test_register_routers_removed():

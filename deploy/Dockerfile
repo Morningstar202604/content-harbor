@@ -1,5 +1,5 @@
 # AI 内容中台后端镜像（基于 uv 管理依赖）
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -30,4 +30,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/health || exit 1
 
-CMD ["uv", "run", "uvicorn", "start:app", "--host", "0.0.0.0", "--port", "8000"]
+# 注意：不要写 `uvicorn start:app`——start.py 的 app 在 main() 里构造，
+# 模块级没有 `app` 属性，uvicorn 导入会直接 AttributeError 退出。
+CMD ["uv", "run", "python", "start.py", "--host", "0.0.0.0", "--port", "8000"]

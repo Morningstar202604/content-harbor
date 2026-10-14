@@ -17,6 +17,7 @@ if str(BACKED_ROOT) not in sys.path:
 
 from service.publishing import db, events, observability as obs  # noqa: E402
 from service.publishing import _webhook_store as _wh  # noqa: E402
+from service.publishing import _event_notifier as _nt  # noqa: E402
 
 
 class _NullLogger:
@@ -51,6 +52,13 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(_auth_mod, "_api_token", lambda: "")
 
     yield {"data": data, "db_file": db_file, "root": tmp_path}
+
+
+@pytest.fixture(autouse=True)
+def _reset_notifier():
+    """F-14：站内通知是模块级环形缓冲（进程内全局），每个测试前清空防串扰。"""
+    _nt.clear()
+    yield
 
 
 @pytest.fixture

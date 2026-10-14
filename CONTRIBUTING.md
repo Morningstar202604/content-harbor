@@ -30,7 +30,7 @@
 每次对外更新按此清单执行，不跳步：
 
 1. **定版本**：按语义化版本（SemVer）——修 Bug 升补丁位、新功能升次版本、破坏性改动升主版本
-2. **同步文档**：改代码的同时更新 README（版本/截图，如界面有变）与依赖清单（requirements / package.json）
+2. **同步文档**：改代码的同时更新 README（版本/截图，如界面有变）与依赖清单（pyproject.toml / uv.lock / package.json）
 3. **本地验证**：跑通测试与构建（与 CI 同款命令），全绿才继续
 4. **合并**：以 PR 方式合入 `main`，CI 全绿后合并
 5. **打标签**：`git tag -a vX.Y.Z -m "vX.Y.Z"` 并推送（`git push origin vX.Y.Z`）

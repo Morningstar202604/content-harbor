@@ -105,7 +105,18 @@ def rollback(conn, version_id):
     # 当前内容先快照（防误操作）
     art = db.get_article(conn, v["article_id"])
     if art:
-        capture(conn, dict(art), change_kind="pre-rollback",
+        art = dict(art)
+        # F-27：目标版本与当前内容逐字相同 → 显式短路，不写历史。
+        # 旧行为照常走两处 capture，均被内容哈希去重跳过，返回值却说"已回滚"，
+        # pre-rollback / rollback 两条记录都写不进去，语义含混。
+        # 注意：比对必须含 tags——回滚本体会 restore tags，只改了标签时
+        # 不是 no-op（_md_hash 不含 tags，所以在这里单独比）。
+        h_cur = _md_hash(art.get("title", ""), art.get("content_md", ""),
+                         art.get("summary", ""))
+        h_ver = _md_hash(v["title"], v["content_md"], v["summary"])
+        if h_cur == h_ver and (art.get("tags") or "") == (v["tags"] or ""):
+            return True, f"当前内容与版本 {version_id} 相同，无需回滚"
+        capture(conn, art, change_kind="pre-rollback",
                 change_note=f"回滚前快照（version_id={version_id}）", created_by="system")
     # 执行回滚
     db.update_article(conn, v["article_id"],

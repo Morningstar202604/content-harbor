@@ -17,25 +17,25 @@ AI 写稿、一键多投、原地更新、定时发布、AIGC 合规门禁、人
 
 ### 桌面端（推荐）
 
-\\ash
+```bash
 cd web
 pnpm install
 pnpm run tauri dev
-\
-桌面启动时，Tauri 自动以 sidecar 模式启动 \acked/\ Python 后端，前端自动连接
+```
+桌面启动时，Tauri 自动以 sidecar 模式启动 `backed/` Python 后端，前端自动连接
 本地后端，不需要手动开命令行窗口。
 
 ### 桌面端构建（发布用）
 
-\\ash
+```bash
 cd web
 pnpm run tauri build
-\
-产物：\web/src-tauri/target/release/content-harbor.exe\（单文件双击即用）。
+```
+产物：`web/src-tauri/target/release/content-harbor.exe`（单文件双击即用）。
 
 ### Web 开发
 
-\\ash
+```bash
 # 终端 1：前端
 cd web
 pnpm install
@@ -45,7 +45,7 @@ pnpm dev          # http://localhost:5173
 cd backed
 uv sync            # 首次安装依赖
 uv run uvicorn app.factory:create_app --host 0.0.0.0 --port 8000 --reload
-\
+```
 浏览器打开 http://localhost:5173（vite 代理自动转发 API 到 :8000）。
 
 ## 核心能力
@@ -68,18 +68,18 @@ uv run uvicorn app.factory:create_app --host 0.0.0.0 --port 8000 --reload
 
 ## 配置
 
-编辑 \acked/config.json\（首次启动自动生成模板）或用环境变量：
+编辑 `backed/config.json`（首次启动自动生成模板）或用环境变量：
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| \HARBOR_API_TOKEN\ | REST 鉴权 Token | 自动生成 UUID |
-| \HARBOR_SECRET_KEY\ | 签名密钥（生产必设） | 开发随机 |
-| \TRUSTED_NETS\ | 受信代理网段（XFF 校验） | 127.0.0.0/8,::1/128 |
-| \CORS_ORIGINS\ | 跨域白名单 | 同源 |
-| \DEMO=1\ | 演示模式（不开浏览器不调外部 API） | 0 |
-| \AI_API_KEY\ | LLM API 密钥 | 空 |
-| \AI_BASE_URL\ | LLM 端点 | deepseek |
-| \FERNET_KEY\ | Webhook secret 加密主密钥 | 自动生成 |
+| `HARBOR_API_TOKEN` | REST 鉴权 Token | 自动生成 UUID |
+| `HARBOR_SECRET_KEY` | 签名密钥（生产必设） | 开发随机 |
+| `TRUSTED_NETS` | 受信代理网段（XFF 校验） | 127.0.0.0/8,::1/128 |
+| `CORS_ORIGINS` | 跨域白名单 | 同源 |
+| `DEMO=1` | 演示模式（不开浏览器不调外部 API） | 0 |
+| `AI_API_KEY` | LLM API 密钥 | 空 |
+| `AI_BASE_URL` | LLM 端点 | deepseek |
+| `FERNET_KEY` | Webhook secret 加密主密钥 | 自动生成 |
 
 ## 登录平台
 
@@ -92,7 +92,8 @@ uv run uvicorn app.factory:create_app --host 0.0.0.0 --port 8000 --reload
 
 ## 发布流程
 
-\AI 写稿 / 手工编辑 → 保存 → 选平台 → 发布
+```
+AI 写稿 / 手工编辑 → 保存 → 选平台 → 发布
                                     │
                     ┌───────────────┤
                     │               │
@@ -107,27 +108,27 @@ uv run uvicorn app.factory:create_app --host 0.0.0.0 --port 8000 --reload
                     │
               成功 → publications 落库
               失败 → Triage 分流（重试/人工/永久失败）
-\
+```
 ## 测试
 
-\\ash
+```bash
 # 一键门禁（四道全绿才能提交）
 pwsh -File scripts/check_all.ps1      # Windows
 bash scripts/check_all.sh            # Linux/macOS
 
 # 单跑
 cd backed
-uv run pytest -q                     # 331 用例
+uv run pytest -q                     # 339 用例
 uv run ruff check .                  # 静态
-\
+```
 ## 备份
 
-\\ash
+```bash
 cd backed
 uv run python ../scripts/backup_data.py              # 到 ~/harbor-backups
 uv run python ../scripts/backup_data.py --dry-run    # 只看计划
-\
-走 \sqlite3.Connection.backup()\ 做在线一致性快照，不用停服务。
+```
+走 `sqlite3.Connection.backup()` 做在线一致性快照，不用停服务。
 拒绝备份到仓库内（防凭据被 commit）。
 
 ## 架构

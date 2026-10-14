@@ -63,7 +63,6 @@ content-harbor/
 │   │   ├── content_qa.py          # 内容质检（可读性/SEO/重复度）
 │   │   ├── crypto.py              # Fernet 加密（Webhook secret）
 │   │   ├── humanize.py            # 人机模拟（WPM/延迟）
-│   │   ├── article_store.py       # 文章 CRUD 仓库（独立模块，可单测）
 │   │   ├── cnblogs_login.py       # 博客园浏览器登录 + MetaWeblog 令牌提取
 │   │   ├── adapters/              # 平台适配器（10 个）
 │   │   │   ├── __init__.py        # @register 注册器
@@ -210,7 +209,7 @@ bash scripts/check_all.sh              # Linux/macOS
 
 # 单跑
 cd backed
-uv run pytest -q                        # 全部 (331 用例)
+uv run pytest -q                        # 全部 (339 用例)
 uv run pytest tests/test_tasks.py -q    # 任务引擎
 uv run ruff check .                     # 静态门禁
 ```
