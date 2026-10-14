@@ -170,3 +170,23 @@ def test_list_failed_jobs_filters_by_type_and_status(sandbox, conn):
     assert len(failed) == 1
     assert failed[0]["article_id"] == 2
     assert "门禁" in failed[0]["message"]
+
+
+def test_locked_connection_close_is_serialized(sandbox):
+    """close() 与 execute 必须互斥（2026-10-14）。
+
+    旧实现 close 不持锁：close 落在并发 executescript 中间 → 底层连接被抽走 →
+    Windows 上 sqlite3 直接访问违例（高负载下全量测试偶发整进程崩）。
+    """
+    c = db.connect(sandbox["db_file"])
+    done = threading.Event()
+    c._exec_lock.acquire()          # 模拟另一线程正在 execute/executescript
+    try:
+        t = threading.Thread(target=lambda: (c.close(), done.set()), daemon=True)
+        t.start()
+        t.join(timeout=0.3)
+        assert not done.is_set(), "close 没有等待执行锁（锁纪律缺口回归）"
+    finally:
+        c._exec_lock.release()
+    t.join(timeout=2)
+    assert done.is_set(), "释放锁后 close 应当完成"

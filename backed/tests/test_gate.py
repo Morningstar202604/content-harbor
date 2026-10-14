@@ -108,14 +108,33 @@ def test_add_aigc_label_writes_ext_fields():
     assert ext["aigc_at"] > 0
 
 
-def test_add_aigc_label_appends_notice():
+def test_add_aigc_label_does_not_touch_body_by_default(monkeypatch, tmp_path):
+    """2026-10-14 契约：默认**不往正文写声明**（标识改走平台「AI 辅助」选项）。
+
+    原 test_add_aigc_label_appends_notice 断言正文被追加——该行为已被用户明确取消。
+    """
+    monkeypatch.setattr(gate, "CONFIG_FILE", tmp_path / "no-config.json")
+    out = gate.add_aigc_label(_art(), "m")
+    assert "本文由 AI 辅助生成" not in out["content_md"]
+    assert out["content_md"] == LONG_SAFE
+    assert json.loads(out["ext"])["aigc"] is True   # ext 留痕仍必须有
+
+
+def test_add_aigc_label_appends_notice_when_opted_in(monkeypatch, tmp_path):
+    """config 打开 AI_DECLARATION_IN_TEXT 时恢复正文声明（纯 API 平台用）。"""
+    cfg = tmp_path / "c.json"
+    cfg.write_text('{"AI_DECLARATION_IN_TEXT": true}', encoding="utf-8")
+    monkeypatch.setattr(gate, "CONFIG_FILE", cfg)
     out = gate.add_aigc_label(_art(), "m")
     assert "本文由 AI 辅助生成" in out["content_md"]
     assert out["content_md"].startswith(LONG_SAFE)
 
 
-def test_add_aigc_label_is_idempotent():
+def test_add_aigc_label_is_idempotent(monkeypatch, tmp_path):
     """重复打标不得堆叠多份声明——AI 改写会反复调用本函数。"""
+    cfg = tmp_path / "c.json"
+    cfg.write_text('{"AI_DECLARATION_IN_TEXT": true}', encoding="utf-8")
+    monkeypatch.setattr(gate, "CONFIG_FILE", cfg)
     once = gate.add_aigc_label(_art(), "m")
     twice = gate.add_aigc_label(once, "m")
     assert twice["content_md"].count("本文由 AI 辅助生成") == 1
@@ -318,11 +337,13 @@ def test_apply_gate_raises_on_reject():
     assert "人工确认" in str(ei.value)
 
 
-def test_apply_gate_labels_ai_source_on_approve():
+def test_apply_gate_labels_ai_source_on_approve(monkeypatch, tmp_path):
+    """AI 源过闸后：ext 留痕必写；正文**不**被追加声明（2026-10-14 新契约）。"""
+    monkeypatch.setattr(gate, "CONFIG_FILE", tmp_path / "no-config.json")
     out = gate.apply_gate_before_publish(_art("ai"), draft_only=True)
     art = out["article"]
     assert json.loads(art["ext"])["aigc"] is True
-    assert "本文由 AI 辅助生成" in art["content_md"]
+    assert "本文由 AI 辅助生成" not in art["content_md"]
 
 
 def test_apply_gate_does_not_label_human_source():

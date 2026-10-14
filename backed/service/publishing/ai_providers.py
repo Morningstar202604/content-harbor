@@ -22,7 +22,8 @@ from pathlib import Path
 
 import requests as _req
 
-ROOT = Path(__file__).resolve().parent.parent
+# config.json 的文档位置是 backed/config.json（2026-10-14 路径修复，同 gate.py）
+ROOT = Path(__file__).resolve().parents[2]
 CONFIG_FILE = ROOT / "config.json"
 
 # Provider 价格级别：决定默认路由

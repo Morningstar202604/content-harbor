@@ -16,8 +16,12 @@ from pathlib import Path
 
 import requests
 
-ROOT = Path(__file__).resolve().parent.parent
-CONFIG_FILE = ROOT / "config.json"
+# 路径基准（2026-10-14 修复）：config.json 的文档位置是 backed/config.json
+# （.gitignore 与 api/auth.py 都按此读）；旧代码用 parent.parent 指出 backed/service/，
+# 导致 AI 密钥/gate 开关从没被文档位置的配置读到过。
+BACKED_ROOT = Path(__file__).resolve().parents[2]      # backed/
+REPO_ROOT = Path(__file__).resolve().parents[3]        # 仓库根（写作风格档案在 docs/）
+CONFIG_FILE = BACKED_ROOT / "config.json"
 
 DEFAULT_BASE = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-chat"
@@ -25,7 +29,7 @@ TIMEOUT = 180
 
 # 写作风格档案：改这个文件就改了全平台产出风格，不用动代码。
 # 覆盖方式：环境变量 WRITING_STYLE_FILE 指向另一份档案。
-STYLE_FILE = ROOT / "docs" / "writing-style.md"
+STYLE_FILE = REPO_ROOT / "docs" / "writing-style.md"
 STYLE_MARK = "【写作风格档案】"
 # 篇幅兜底：AI 返回正文短于 要求字数 × 该比例 时自动续写一轮（只续一轮，
 # 防止无止境拉长；比例 0.6 是"明显偷工"与"风格偏短但合格"的分界）。
@@ -38,10 +42,15 @@ MAX_EXPAND_ROUNDS = 1
 # 不指定时 fallback 到旧的单 Provider 逻辑（向下兼容）。
 _providers_mod = None
 def _get_providers():
-    """惰性加载 providers 模块（避免循环导入）。"""
+    """惰性加载 AI 多 Provider 路由模块（避免循环导入）。
+
+    注意：模块名是 ai_providers（原 providers.py 与平台工具包 providers/ 同名，
+    Python 里包优先于模块 → 旧名永远解析到平台工具包，_resolve_providers
+    必 AttributeError，AI 写稿整体不可用。2026-10-14 改名修复）。
+    """
     global _providers_mod
     if _providers_mod is None:
-        from service.publishing import providers as p
+        from service.publishing import ai_providers as p
         _providers_mod = p
     return _providers_mod
 
@@ -51,9 +60,9 @@ def _cfg(key, default=None):
 
 
 def _load_dotenv():
-    """零依赖 .env 加载：项目根 .env 里的 KEY=VALUE 作为最底层兜底。
+    """零依赖 .env 加载：backed/.env 里的 KEY=VALUE 作为最底层兜底。
     不覆盖已存在的真实环境变量，不覆盖 config.json 已解析的值。"""
-    env_file = ROOT / ".env"
+    env_file = BACKED_ROOT / ".env"
     if not env_file.exists():
         return
     for line in env_file.read_text(encoding="utf-8").splitlines():

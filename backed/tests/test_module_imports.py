@@ -36,6 +36,7 @@ MODULES = [
     "utils.masking",
     "service.publishing.ai",
     "service.publishing.ai_enhancements",
+    "service.publishing.ai_providers",
     "service.publishing.content_qa",
     "service.publishing.db",
     "service.publishing.events",

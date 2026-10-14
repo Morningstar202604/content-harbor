@@ -33,6 +33,9 @@ from service.publishing.observability import TraceContext
 from service.publishing import gate as aigc_gate
 
 ROOT = Path(__file__).resolve().parent.parent
+# config.json 的文档位置是 backed/config.json（2026-10-14 路径修复；ROOT 继续用于
+# 数据/profile 等 service/ 下的既有路径与 import_md 的越权防护边界）
+BACKED_ROOT = Path(__file__).resolve().parents[2]
 
 # 导入即注册
 from service.publishing.adapters import (  # noqa: F401
@@ -102,16 +105,23 @@ class Hub:
         return self._browser_pool._busy_for(platform, account)
 
     def close_all(self):
-        """进程退出前关浏览器 + 停调度器 + 关任务引擎（atext 兜底）。"""
+        """进程退出前关浏览器 + 停调度器 + 关任务引擎（atexit 兜底）。
+
+        atexit 里任何未捕获异常都会以 "Exception ignored" 噪声打到进程退出输出
+        （测试进程退出时临时目录已清理，这里逐个兜住，保证退出干净）。
+        """
         try:
             self.scheduler.stop()
-        except Exception:
+        except Exception:   # aqg: top-level boundary（进程退出兜底，逐个吞错）
             pass
         try:
             self.tasks.close()
-        except Exception:
+        except Exception:   # aqg: top-level boundary（同上）
             pass
-        self._browser_pool.close_all_browsers()
+        try:
+            self._browser_pool.close_all_browsers()
+        except Exception:   # aqg: top-level boundary（同上）
+            pass
 
     # ---------------- 账号 ----------------
 
@@ -253,7 +263,7 @@ class Hub:
                     return r
                 # 登录成功，抠令牌（username 用登录名，别拿 blogApp 冒充）
                 page = br.new_page()
-                mw = extract_metaweblog(page, save_to=str(ROOT / "config.json"),
+                mw = extract_metaweblog(page, save_to=str(BACKED_ROOT / "config.json"),
                                         login_username=username)
                 page.close()
                 db.upsert_account(self.conn, "cnblogs", account, str(br.profile_dir),
@@ -489,6 +499,14 @@ class Hub:
                        draft_only=False, page_hook=None, settings=None):
         """发布到单个平台并完成落库（jobs/publications 记账）。
 
+        发布模式（settings[platform].mode，2026-10-14 新增）：
+          - auto（默认）：全自动发到底，行为与本函数原实现逐字一致；
+          - assist：自动打开平台页并**预填**文章/标题/标签，停在提交前交还控制权
+            等用户改配置/选项/上传附件，用户自己点发布（任务挂 pending_user，可恢复）；
+          - manual：只打开平台新建页，不做任何自动填写，用户全程自选。
+        中断模式（assist/manual）与 auto 共用同一套门禁/记账；中断时必须先释放
+        浏览器池锁再等用户，否则同账号其它任务会被一直堵住。
+
         演示模式：直接返回模拟成功（含平台域名下的模拟链接），
         让任务引擎、发布记录、前端全链路真实呈现，只差"真的打到平台"。"""
         if self.demo:
@@ -520,6 +538,14 @@ class Hub:
                     "post_id": _pid, "post_url": _url, "edit_url": _url + "/edit",
                     "draft_only": draft_only, "demo": True,
                     "note": f"已模拟发布到《{_nm}》（演示模式）"}
+        # 模式分流：assist/manual 在提交前交还控制权（不进自动发布主链）
+        _ps = (settings or {}).get(platform) or {}
+        mode = (_ps.get("mode") or "auto").strip() or "auto"
+        if mode in ("assist", "manual"):
+            return self._publish_with_handoff(
+                article_id, platform, article, account=account,
+                draft_only=draft_only, settings=settings, mode=mode)
+
         # 统一入口：legacy 与任务引擎都走这里（重构第一刀）
         # 共用的唯一发布原语。成功返回结果 dict（platform/ok/status/post_id/...），
         # 失败在完成失败记账后抛异常。
@@ -546,6 +572,10 @@ class Hub:
                     "ai_assist": ps.get("ai_assist", False),
                     "event": (ps.get("event") or "").strip(),
                     "allow_comment": ps.get("allow_comment", True),
+                    # 2026-10-14 新增：知乎回答问题模式（问题链接给了就写回答而非专栏）
+                    "question_url": (ps.get("question_url") or "").strip(),
+                    # 2026-10-14 新增：发布模式（auto/assist/manual）
+                    "mode": (ps.get("mode") or "auto").strip() or "auto",
                 })
             r = self._with_adapter(platform, account, _do, page_hook=page_hook)
             # 体检 B1 修复（QA 标质力 2026-09-21）：适配器返回 error 键时
@@ -584,16 +614,94 @@ class Hub:
             db.upsert_publication(self.conn, article_id, platform, account,
                                   status="failed", last_error=str(e)[:300])
             db.finish_job(self.conn, job, False, str(e)[:300])
-            raise
+            raise   # aqg: top-level boundary（失败记账后重抛，任务引擎据此分诊）
+
+    def _publish_with_handoff(self, article_id, platform, article, account="default",
+                              draft_only=False, settings=None, mode="assist",
+                              timeout=1800):
+        """中断模式（assist/manual）：预填（assist）或空白（manual）打开平台页，
+        提交前交还控制权，等用户改配置/上传附件/自己点发布。
+
+        返回带 pending_user=True 的结果；任务引擎据 status=="pending_user" 挂起等
+        用户，用户处理完在平台上自行发布，回来点「已处理，继续」走既有 resume。
+
+        为什么不能直接复用 assist_open：那条路不带文章上下文（不预填）。这里预填
+        后仍要**释放池锁再等**——等待期通常几分钟到几十分钟，持锁会把同账号的
+        其它任务全堵死（browser_pool 的 per-key 互斥）。
+        """
+        ad = get_adapter(platform)
+        if not ad.needs_browser:
+            # 纯协议平台没有「打开页面等人」这个中间态，退化为自动发布
+            settings = dict(settings or {})
+            settings[platform] = {**(settings.get(platform) or {}), "mode": "auto"}
+            return self.publish_single(article_id, platform, article, account=account,
+                                       draft_only=draft_only, settings=settings)
+
+        ps = (settings or {}).get(platform) or {}
+        job = db.add_job(self.conn, "publish", article_id, platform)
+        opened = {}
+
+        def _fill():
+            """在浏览器线程里：拿到页面 → （assist 预填）→ 记 URL 后立刻返回，
+            让出控制权（不点发布）。"""
+            br = self._acquire(platform, account)   # 已持池锁（_acquire 语义）
+            page = br.new_page()
+            target = ps.get("question_url") or ad.new_url or ad.home_url
+            page.goto(target, timeout=60000, wait_until="domcontentloaded")
+            time.sleep(2)
+            if mode == "assist" and not ps.get("question_url"):
+                # 预填标题（正文/标签等由适配器内的导入机制在 auto 链完成；
+                # 中断模式只要用户看得见的标题先落位，其余交给用户）
+                try:
+                    page.fill('textarea.Input[placeholder*="请输入标题"]',
+                             (article.get("title") or "")[:100], timeout=8000)
+                except Exception:   # aqg: top-level boundary（预填失败不阻断中断流程）
+                    pass
+            opened["page"] = page
+            opened["url"] = page.url or target
+
+        with self._busy_for(platform, account):
+            try:
+                browser_thread_run(_fill)
+            except Exception as e:   # aqg: top-level boundary（开页失败记 job 后重抛，任务引擎分诊）
+                db.finish_job(self.conn, job, False, str(e)[:300])
+                raise
+        # 锁已释放，浏览器保持打开；交还控制权
+        db.upsert_publication(self.conn, article_id, platform, account,
+                              status="pending_user", post_url=opened.get("url", ""),
+                              edit_url=opened.get("url", ""),
+                              last_error="", draft_only=1 if draft_only else 0,
+                              updated_at=db.now())
+        db.finish_job(self.conn, job, True,
+                      f"{mode} 模式：页面已打开（{opened.get('url', '')}），等待用户处理")
+        return {
+            "platform": platform, "ok": True, "status": "pending_user",
+            "pending_user": True,
+            "post_id": "", "post_url": "", "edit_url": opened.get("url", ""),
+            "message": ("浏览器已打开，等你改配置/传附件并自行点发布"
+                        if mode == "assist" else
+                        "平台新建页已打开，请自行完成全部填写与发布"),
+            "mode": mode,
+        }
 
     def publish(self, article_id, platforms, account="default", draft_only=False,
-                page_hook=None, settings=None):
+                page_hook=None, settings=None, human_confirmed=False, mode=None):
         art = self.get(article_id)
         if not art:
             raise ValueError(f"文章 {article_id} 不存在")
-        # AIGC 合规门禁：发布前强制过闸（安全扫描 + 双模型审查 + 人审闸门）
+        # 发布模式（2026-10-14）：mode 为全平台默认档；settings[platform].mode 逐平台覆盖。
+        if mode:
+            merged = {pf: {**((settings or {}).get(pf) or {})} for pf in platforms}
+            for pf in platforms:
+                merged[pf].setdefault("mode", mode)
+            for pf, v in (settings or {}).items():   # 保留未在 platforms 里的配置
+                merged.setdefault(pf, v)
+            settings = merged
+        # AIGC 合规门禁：发布前强制过闸（安全扫描 + 双模型审查 + 人审闸门）。
+        # human_confirmed：前端「我已核验」显式确认，允许 AI 源正式发布（留痕 ext）。
         try:
-            gate_r = aigc_gate.apply_gate_before_publish(art, draft_only=draft_only)
+            gate_r = aigc_gate.apply_gate_before_publish(
+                art, draft_only=draft_only, human_confirmed=human_confirmed)
         except aigc_gate.GateError as ge:
             # 门禁拒绝：记入 jobs（每个平台各一条），便于 /ai/gate 端点追溯
             for pf in platforms:
@@ -603,6 +711,16 @@ class Hub:
             from fastapi import HTTPException
             raise HTTPException(422, f"合规门禁拒绝发布: {ge}")
         art = gate_r["article"]   # AI 源已打 AIGC 标识
+        # 人工确认留痕：谁在什么时候确认了 AI 稿上线（审计追溯，只写不覆盖已有时点）
+        if human_confirmed and aigc_gate.is_ai_sourced(art) and not draft_only:
+            try:
+                ext = json.loads(art.get("ext") or "{}")
+                ext.setdefault("human_confirmed_at", time.time())
+                ext["human_confirmed_publish"] = True
+                db.update_article(self.conn, article_id,
+                                  ext=json.dumps(ext, ensure_ascii=False))
+            except Exception:   # aqg: top-level boundary（留痕失败不阻断发布）
+                pass  # 留痕失败不阻断发布（已过闸，job/trace 仍有记录）
         if not (art.get("title") or "").strip():
             raise ValueError("文章标题为空，拒绝发布（B19 预检）")
         results = []
@@ -625,7 +743,8 @@ class Hub:
                 else:
                     # 体检 B10 修复（QA 标质力 2026-09-21）：回落草稿（pending_human）
                     # 不算发布完成，文章状态收敛保持 draft
-                    if r.get("status") == "pending_human":
+                    # 2026-10-14：pending_user（中断模式等你处理）同理不算完成
+                    if r.get("status") in ("pending_human", "pending_user"):
                         all_ok = False
                     results.append(r)
                     tctx.step(f"{pf}.publish", dur=time.time() - _t0, ok=True,

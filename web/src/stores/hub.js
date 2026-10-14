@@ -9,6 +9,9 @@ import { useAccountStore } from './account'
 import { useTagStore } from './tag'
 import { useScheduleStore } from './schedule'
 import { useWebhookStore } from './webhook'
+import { useSettingsStore } from './settings'
+
+const VIEWS = ['write', 'publish', 'tasks', 'settings']
 
 /**
  *主编排层：组合所有子 store，对外提供统一接口。
@@ -17,7 +20,7 @@ import { useWebhookStore } from './webhook'
  */
 export const useHubStore = defineStore('hub', {
   state: () => ({
-    view: localStorage.getItem('hub_view') || 'write',
+    view: VIEWS.includes(localStorage.getItem('hub_view')) ? localStorage.getItem('hub_view') : 'write',
     aiReady: false,
     aiProviders: [],
     publishing: false,
@@ -50,6 +53,8 @@ export const useHubStore = defineStore('hub', {
     schedules() { return useScheduleStore().schedules },
     webhooks() { return useWebhookStore().webhooks },
     notifications() { return useWebhookStore().notifications },
+
+    settings() { return useSettingsStore() },
   },
 
   actions: {
@@ -62,6 +67,7 @@ export const useHubStore = defineStore('hub', {
       const account = useAccountStore()
       const task = useTaskStore()
       const article = useArticleStore()
+      const settings = useSettingsStore()
 
       await Promise.all([
         account.loadStatus(),
@@ -69,6 +75,7 @@ export const useHubStore = defineStore('hub', {
         article.loadList(),
         account.loadPendingHuman(),
         task.loadTasks(),
+        settings.loadAI(),
       ])
 
       task.connectSSE()
@@ -105,7 +112,7 @@ export const useHubStore = defineStore('hub', {
       catch { return [] }
     },
 
-    async publish(platforms, draftOnly, settings = {}) {
+    async publish(platforms, draftOnly, settings = {}, humanConfirmed = false, mode = 'auto') {
       const article = useArticleStore()
       const account = useAccountStore()
       if (!platforms.length) return null
@@ -114,7 +121,8 @@ export const useHubStore = defineStore('hub', {
 
       this.publishing = true
       try {
-        const t = await api.publish(article.currentId, platforms, draftOnly, 'default', settings)
+        const t = await api.publish(article.currentId, platforms, draftOnly, 'default',
+                                    settings, humanConfirmed, mode)
         const done = await useTaskStore()._waitTask(t.task_id, 600000)
         await Promise.all([
           account.loadPendingHuman(true),
@@ -130,15 +138,26 @@ export const useHubStore = defineStore('hub', {
 
     async updateRemote(platforms) {
       const article = useArticleStore()
-      const account = useAccountStore()
       if (!article.currentId) return
+      return this.updateArticleRemote(article.currentId, platforms)
+    },
+
+    /** 指定文章的原地更新（发布中心对任意文章发起的同步） */
+    async updateArticleRemote(aid, platforms) {
+      const article = useArticleStore()
+      const account = useAccountStore()
       this.publishing = true
       try {
-        const t = await api.update(article.currentId, platforms)
+        const t = await api.update(aid, platforms)
         const done = await useTaskStore()._waitTask(t.task_id, 900000)
-        await Promise.all([account.loadStatus(), article.loadPubs(), article.loadAllPubs(), aiLoadTasks()])
+        await Promise.all([account.loadStatus(), article.loadPubs(),
+                           article.loadAllPubs(), article.loadList(), aiLoadTasks()])
         return done
       } finally { this.publishing = false }
+    },
+
+    async loadArticles() {
+      return await useArticleStore().loadList()
     },
 
     async syncPending() {
@@ -157,6 +176,25 @@ export const useHubStore = defineStore('hub', {
       await Promise.all([article.loadList(), aiLoadTasks()])
       return done
     },
+
+    /** 检测平台登录态（同步 GET，比走任务快）并刷新账号列表 */
+    async checkPlatform(pf) {
+      try {
+        const r = await api.checkAccount(pf)
+        await useAccountStore().loadStatus()
+        return r
+      } catch { return null }
+    },
+
+    /** 登出平台（清 profile + 快照，账号置离线） */
+    async logoutPlatform(pf) {
+      const r = await api.logout(pf)
+      await useAccountStore().loadStatus()
+      return r
+    },
+
+    /** 平台接入诊断（怎么接、验证码怎么过） */
+    diagnosePlatform(pf) { return api.diagnose(pf) },
 
     async assistOpen(platform, url) {
       if (!url) { ElMessage.warning('没有可打开的平台页地址'); return }

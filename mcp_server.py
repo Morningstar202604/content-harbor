@@ -129,11 +129,17 @@ def ai_image_prompts(article_id: int, n: int = 3) -> dict:
 
 @mcp.tool()
 def publish_article(article_id: int, platforms: list,
-                    draft_only: bool = False, account: str = "default") -> dict:
-    """异步发布文章到指定平台，返回 task_id。用 get_task 查询进度。"""
+                    draft_only: bool = False, account: str = "default",
+                    human_confirmed: bool = False) -> dict:
+    """异步发布文章到指定平台，返回 task_id。用 get_task 查询进度。
+
+    draft_only=False 为真实上线；AI 源文章需 human_confirmed=True
+    （表示人工已核验）或服务端开启 AI_DIRECT_PUBLISH，否则被合规门禁拒绝。
+    """
     task_id = _get_hub().tasks.submit("publish", article_id=article_id,
                                        platforms=platforms, account=account,
-                                       draft_only=draft_only)
+                                       draft_only=draft_only,
+                                       human_confirmed=human_confirmed)
     return {"task_id": task_id, "status": "pending",
             "poll": f"GET /tasks/{task_id}"}
 

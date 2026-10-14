@@ -195,11 +195,21 @@ def start_dispatcher():
 
 
 def stop_dispatcher():
-    """停止异步 webhook 派发线程。"""
-    global _dispatcher_running
+    """停止异步 webhook 派发线程（确定性回收：置停 + 唤醒 + join + 允许重启）。
+
+    2026-10-14 修复：旧实现只置停不 join、也不清引用——线程可能在连接已关闭后
+    才醒来处理队列（Windows 上表现为解释器退出期 sqlite 访问违例，测试进程
+    间歇性崩溃）；且残留的线程引用让后续 start_dispatcher() 永远 no-op。
+    """
+    global _dispatcher_running, _dispatcher_thread
     _dispatcher_running = False
     with _dispatch_cv:
         _dispatch_cv.notify()
+    t = _dispatcher_thread
+    if t is not None:
+        if t.is_alive():
+            t.join(timeout=2)
+        _dispatcher_thread = None
 
 
 # ---------------- TaskManager 事件包装 -----------------

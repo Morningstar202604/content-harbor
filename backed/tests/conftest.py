@@ -53,6 +53,9 @@ def sandbox(tmp_path, monkeypatch):
 
     yield {"data": data, "db_file": db_file, "root": tmp_path}
 
+    # 测试后再兜一次：派发线程不允许跨测试存活（join + 允许下个测试重启）
+    events.stop_dispatcher()
+
 
 @pytest.fixture(autouse=True)
 def _reset_notifier():

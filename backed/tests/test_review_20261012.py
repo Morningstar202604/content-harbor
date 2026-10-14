@@ -38,11 +38,9 @@ def live_hub(sandbox):
     """一个真 Hub（走 sandbox 临时库），测完自动关 worker + conn。"""
     hub = service_mod.Hub()
     yield hub
-    try:
-        hub.tasks.close()
-        hub.tasks._worker.join(timeout=5)
-    except Exception:
-        pass
+    # 完整回收：停调度器/任务/浏览器池——只关 worker 会漏掉 scheduler 守护线程，
+    # 线程在解释器退出期还在碰 sqlite → Windows 间歇性访问违例（2026-10-14 修复）
+    hub.close_all()
     try:
         hub.conn.close()
     except Exception:
@@ -55,6 +53,10 @@ def _with_client(sandbox):
     import api.deps as hub_deps
     hub_deps._hub_instance = hub
     c = TestClient(create_app())
+    # client 被回收（测试结束）时一并回收 Hub 的全部后台线程，
+    # 防解释器退出期线程碰 sqlite 导致测试进程崩（同上）
+    import weakref
+    weakref.finalize(c, hub.close_all)
     return c, hub
 
 
@@ -86,8 +88,7 @@ def test_platform_name_rejects_traversal_via_http(sandbox):
         # 关键断言：不是 200 成功
         assert r.status_code != 200, f"路径穿越未被拦: {r.status_code} {r.text[:200]}"
     finally:
-        hub.tasks.close()
-        hub.tasks._worker.join(timeout=5)
+        hub.close_all()   # 含 scheduler/浏览器池线程（只关 worker 会漏，退出期碰 sqlite 崩）
         hub.conn.close()
 
 
@@ -102,8 +103,7 @@ def test_platform_name_allows_valid_http(sandbox, monkeypatch):
         assert r2.status_code == 200, f"合法平台未放行: {r2.status_code} {r2.text[:200]}"
         assert r2.json()["logined"] is True
     finally:
-        hub.tasks.close()
-        hub.tasks._worker.join(timeout=5)
+        hub.close_all()   # 同上：完整回收后台线程
         hub.conn.close()
 
 

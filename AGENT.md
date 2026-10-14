@@ -77,7 +77,9 @@ content-harbor/
 │   │   │   ├── toutiao.py         # 头条号
 │   │   │   ├── wuyi_cto.py       # 51CTO
 │   │   │   └── zhihu.py          # 知乎
-│   │   ├── providers/             # AI Provider 路由（0.7.0 新增）
+│   │   ├── ai_providers.py        # AI 多 Provider 路由（8 家：DeepSeek/Kimi/GLM/…）
+│   │   ├── ai_config.py           # AI 配置读写（掩码/白名单原子写/连通性测试）
+│   │   ├── providers/             # 平台外部工具 Provider（biliup/wenyan 等薄壳）
 │   │   │   ├── __init__.py
 │   │   │   ├── base.py            # Provider 基类
 │   │   │   ├── bilibili.py        # B站 API Provider
@@ -209,7 +211,7 @@ bash scripts/check_all.sh              # Linux/macOS
 
 # 单跑
 cd backed
-uv run pytest -q                        # 全部 (339 用例)
+uv run pytest -q                        # 全部 (379 用例)
 uv run pytest tests/test_tasks.py -q    # 任务引擎
 uv run ruff check .                     # 静态门禁
 ```

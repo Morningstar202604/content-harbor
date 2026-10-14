@@ -2,6 +2,157 @@
 
 ---
 
+## [Unreleased] - 2026-10-14（第四轮：AI 声明改走平台选项 + 发布多模式）
+
+> 主题：**AI 声明不再写进正文（改用平台自带「AI 辅助」选项）；发布支持三档操作模式**。
+> 测试用例 364 → 379（新增 `test_publish_modes.py` 10 例、`test_task_pending_user.py` 4 例；
+> 更新 `test_gate.py` 3 例以反映新契约）。
+
+### 变更：AI 声明改走平台选项（不再污染正文）
+
+- `gate.add_aigc_label` 默认**不再向正文追加**「本文由 AI 辅助生成」；标识义务改由平台
+  自带的「AI 辅助创作」选项承担（知乎适配器早已内置该开关的自动勾选，本轮接线）。
+- `ext.aigc / ai_model / aigc_at` 留痕**保留**（可追溯性不丢）。
+- 新增配置 `AI_DECLARATION_IN_TEXT`（默认 false）：无原生 AI 选项的纯 API 平台
+  （博客园 MetaWeblog / 掘金 API 等）可置 true 恢复正文声明。
+- 前端发布轨新增「勾选平台的『AI 辅助创作』声明」开关（默认开）。
+
+### 新增：三档发布模式（谁来操作）
+
+- `settings[platform].mode`（或请求级 `mode`）：**auto**（默认，全自动发到底）/
+  **assist**（打开平台页并预填标题，停在提交前等你改配置/传附件，自己点发布）/
+  **manual**（只打开平台新建页，一个字都不自动填，全程自选自填自发）。
+- 中断模式（assist/manual）任务落 `waiting_human`，发布实例状态 `pending_user`
+  （前端显示「等你确认」）；**resume 对 pending_user 是「标记完成」语义，不重跑**
+  ——避免在平台上重复发布。
+- 中断时先释放浏览器池锁再等用户（否则同账号其它任务被堵）；纯协议平台自动降级 auto。
+- API：`POST /articles/{id}/publish` 增 `mode`（非法值 422）；AI 稿全自动发布仍走人审闸门，
+  中断/手动模式由用户在平台上亲自确认承接合规（仍保留高危词扫描）。
+
+===
+
+## [Unreleased] - 2026-10-14（第三轮：知乎回答问题能力 + 两篇真实发布）
+
+> 主题：**新增知乎「回答问题」链路并完成两篇真实上线（专栏文章 + 问题回答）**。
+> 测试用例 357 → 364（新增 `test_zhihu_answer_flow.py`，7 用例）。
+
+### 新增：知乎回答问题（`publish_as_answer`）
+
+- 在发布轨的知乎卡片粘贴**问题链接**即进入回答模式（留空仍发专栏文章）：
+  `settings.zhihu.question_url` → `publish_single` options 下发 → 适配器分流。
+- 真机探针（2026-10-14）钉死的两条关键事实：
+  - 问题页「写回答」按钮被 sticky 顶栏拦截，`locator.click` 与 `force` 点击都失败，
+    **JS `click()` 是唯一稳定通道**；编辑器出现需自行轮询存在性
+    （`_wait_editor(want_text=False)` 在编辑器未出现时也会满足条件，不能用来等开场）。
+  - 回答编辑器与专栏编辑器同构（同款 Draft.js `div[data-contents="true"]` +
+    「导入→导入文档」+ file input），整套导入/清空/回读机制**原样复用**。
+- 沿用既有发布纪律：点发布前回读正文（证不出即拒发，绝不带错内容上线）、
+  发布后双通道验证（URL 出现 `/answer/` **或** 按钮变「修改回答」）、失败存现场 debug。
+- 回归：`test_zhihu_answer_flow.py` 7 用例（分流 / 双通道验证 / 回读不符拒发 /
+  编辑器未开报错 / draft_only 不发布 / 发布未确认报错），不触网；首轮 6 红 → 修夹具后全绿。
+
+### 真实发布（本地实测记录）
+
+- 专栏系列第 2 篇《学 AI 第二步：把活儿交给 AI 之前，先过这 4 道关》：
+  https://zhuanlan.zhihu.com/p/2093716695743575672 （任务 `74c0460899`，55s，ok）
+- 回答《AI发展这么快，普通人应该从哪里开始学习AI？》：
+  https://www.zhihu.com/question/2088198385572526079/answer/2093717357122396372
+  （任务 `2640a8aa68`，25s，ok，新链路首次 live 验证）
+- 两篇均走 `human_confirmed` 通道（AI 稿人工核验后上线），`ext` 留痕
+  `aigc=True / human_confirmed_publish=True`；只读复核确认线上正文含 AIGC 声明
+  （标识由发布门禁幂等注入，数据库保留作者原文为有意设计）。
+
+### 待办（报告向用户说明）
+
+- 候选问题 2090776648023013094 上可能有探针期留下的空草稿，需要时可在知乎 App 删除。
+- 删除类能力目前全平台缺失（仅「原地更新」）；实施需独立任务 + 二次确认 + 回读验证，待用户指定目标。
+
+===
+
+## [Unreleased] - 2026-10-14（第二轮：真实发布 + 前端重构）
+
+> 主题：**让真实发布真正可用 + AI 配置端点 + 前端按发布工作流整体重构**。
+> 测试用例 339 → 355（新增 `test_real_publish_and_ai_config.py`，14 用例 + imports 参数化 1）。
+
+### 修复：测试套件在 Windows 上的偶发整进程崩溃（访问违例）
+
+- 症状：全量 pytest 在机器高负载时偶发 `Windows fatal exception: access violation`
+  （实测约 1/5），崩溃点在 sqlite `executescript`。
+- 根因（三处叠加）：① `LockedConnection.close()` 未持执行锁——close 落在并发
+  execute 中间会把底层连接抽走（use-after-close → AV）；② 事件派发线程
+  `stop_dispatcher()` 只置停、不 join、不清线程引用（且残留引用让重启永远 no-op）；
+  ③ 测试侧 Hub 只关 worker 线程、不停 scheduler/派发线程，解释器退出期线程仍在碰 sqlite。
+- 修复：`close()` 纳入 `_exec_lock`（+ 锁纪律回归测试）；`stop_dispatcher` 改为
+  置停 + 唤醒 + join + 允许重启；测试夹具统一改用 `hub.close_all()` 全量回收；
+  `Hub.close_all()` 兜住全部子步骤异常（退出零噪声）。
+- 验证：修复后 **18 次连续全量运行全绿**（357 passed）。
+
+### 大修复：配置文件路径与文档位置不一致（写作风格档案从未加载）
+
+- `ai.py`/`gate.py`/`ai_providers.py` 的 `ROOT = parent.parent` 解析到
+  `backed/service/`，而 config.json 的**文档位置是 `backed/config.json`**
+  （`.gitignore`、`api/auth.py` 均按此读）——AI 密钥、`REVIEW_MODEL`、
+  `AI_DIRECT_PUBLISH`、`AIGC_GATE` 开关实际从未从文档位置被读到；
+  写作风格档案指向不存在的 `backed/service/docs/writing-style.md`，
+  **风格档案功能从未生效**（`load_style()` 永远返回空）。
+- 修复后统一指向 `backed/config.json` / 仓库根 `docs/writing-style.md`；
+  新增路径契约测试把四个模块的 `CONFIG_FILE` 与 `STYLE_FILE` 锁死。
+- `service.py` 的博客园 MetaWeblog 令牌保存同样修正到 `backed/config.json`。
+
+### 大修复：AI 写稿此前整体不可用（名称撞车）
+
+- **`providers.py` 与 `providers/` 同名，包优先于模块**——AI 多 Provider 路由模块被
+  平台工具包遮蔽：`ai.chat()` 每次调用都在 `_resolve_providers()` 上 AttributeError，
+  8 家 AI Provider 路由（DeepSeek/Kimi/GLM/通义/OpenAI/Claude/Ollama）全部失效；
+  `GET /ai/providers` 也返回错的（平台工具列表）。
+- 修复：`git mv providers.py ai_providers.py` + 4 处 import 点；`/ai/providers` 返回
+  AI Provider（掩码），平台外部工具移到 `/ai/tool-providers`；模块导入测试加锁。
+
+### 大修复：AI 稿「永远进草稿箱」的断头路 → 真实发布通道
+
+- 原门禁对 `source=ai` 正式发布一律拒绝，而「人工确认后再发」的通道从未实现，
+  `config.example.json` 里设计的 `AI_DIRECT_PUBLISH` 零实现，`PublishIn.live` 是死参数
+  ——AI 稿只能进草稿箱，永远发不出去。
+- 现在：
+  - **human_confirmed**：前端「我已核验」显式确认 → AI 稿可正式上线，
+    `ext.human_confirmed_publish/at` 审计留痕；REST/MCP 同步支持该参数。
+  - **AI_DIRECT_PUBLISH**（设置页开关）：开启后 AI 稿经安全扫描 + 双模型二审 +
+    AIGC 标识后直接上线（自动发布管线场景）。
+  - **发布前预检**：确定性拒绝（AI 未确认 / 高危词）在提交前同步 422 并给出可操作
+    提示，不再让用户等任务跑完才知道被拒；完整门禁（含 LLM 二审）仍在任务里兜底。
+  - 前端错误提示修正：读后端 `{code, message}` 包（此前只读 `detail`，
+    门禁拒绝在界面上显示英文 axios 报错）。
+- 实测（DEMO 后端 + HTTP）：未确认 422 → 勾选核验发布 ok 且留痕 → 直发开关生效 →
+  高危词 422 → 草稿路径不受影响（详见冒烟记录）。
+
+### 新增：AI 配置端点 + 设置界面
+
+- `GET/PUT /ai/config`：7 家 Provider 的密钥（**只回掩码，永不回显明文**）、
+  接口地址、默认模型、模型清单、价格级别；`REVIEW_MODEL`（二审模型）、
+  `AI_DIRECT_PUBLISH`；白名单合并写 + 原子落盘（tmp+replace），
+  `HARBOR_API_TOKEN` 等无关键原样保留；解析失败拒绝写入。
+- `POST /ai/config/test`：真实最小调用测连通（ping→pong），支持对未保存字段先测，
+  失败返回结构化错误不抛 500。
+- 前端「设置 → AI 模型」：Provider 折叠卡片（密钥/地址/模型/级别 + 测试连接 +
+  清除密钥）、AI 稿直发开关、二审模型、任务路由说明、写作风格档案状态。
+
+### 前端：按发布工作流整体重构（views 层重建）
+
+- 新壳层：侧栏导航（写作台 / 发布中心 / 任务中心 / 设置）+ AI 就绪与待人工徽标。
+- **写作台**：列表 | 编辑器 | **发布轨** 三栏。发布轨 = 平台选择（登录态圆点、
+  未登录就地登录、掘金/CSDN 分类记忆）→ 发布方式（默认「立即发布（真实上线）」，
+  「仅存草稿」为次选）→ AI 稿合规条（勾选核验 / 直发提示）→ 就地进度与每平台结果
+  → 已发布实例状态与单/全平台更新。
+- **发布中心**：待人工处置（任务挂起 + 平台草稿待发）、待同步实例一键同步、
+  全平台发布记录表。
+- **任务中心**：类型/状态筛选 + SSE 实时进度 + 任务详情 + 恢复/放弃。
+- **设置**：AI 模型 / 平台账号（登录·检测·登出·诊断·抓取）/ 定时发布 / 通知 Webhook
+  / 标签治理，五个面板。
+- 移除被取代组件：AppHeader / ManagePanel / PublishWizard / usePublishWizard
+  （store 分层与晴空设计 token 保留复用，无新依赖）。
+
+===
+
 ## [Unreleased] - 2026-10-14
 
 > 主题：**审查收尾轮 —— 剩余低危项清零 + 本机凭据卫生 + README 损坏修复**。

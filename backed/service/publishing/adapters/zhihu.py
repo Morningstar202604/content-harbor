@@ -35,6 +35,7 @@
   根本没被点到，于是"点了但没生效"。所以提交一律走精确文本匹配。
 """
 
+import re
 import time
 
 from service.publishing.adapters.base import (
@@ -53,6 +54,14 @@ EDIT_URL_TMPL = "https://zhuanlan.zhihu.com/p/{post_id}/edit"
 IMPORT_BTN_SEL = 'button:has-text("导入")'
 IMPORT_DOC_SEL = 'button[aria-label="导入文档"]'
 MODAL_FILE_SEL = ".Modal input[type=file]"
+
+# ---- 回答问题（2026-10-14 新增，真机探针实测）----
+# 问题页「写回答」按钮：页面顶栏 sticky，Playwright 常规 click 会被 header
+# 拦截（"intercepts pointer events"），force=True 也打不开——实测唯一稳定
+# 通道是 JS 直接 click()。
+WRITE_ANSWER_BTN_SEL = "button.WriteAnswerButton"
+ANSWER_PUBLISH_TEXTS = ("发布回答",)
+ANSWER_URL_RE = re.compile(r"/answer/(\d+)")
 
 # 编辑器「真的渲染出正文了」的判据：只看 DOM 在不在会被空编辑器骗过去
 # （选择器命中但 innerText 是空的，正是上一轮误报的现场）。
@@ -379,6 +388,11 @@ class ZhihuAdapter(PlatformAdapter):
 
     def publish(self, page, article, options=None):
         options = options or {}
+        # 回答问题模式：settings.zhihu.question_url 给了问题链接就写回答而非发专栏
+        question_url = (options.get("question_url") or "").strip()
+        if question_url:
+            return self.publish_as_answer(page, article, question_url, options)
+
         page.goto(self.new_url, timeout=60000, wait_until="domcontentloaded")
         page.wait_for_selector(TITLE_SEL, timeout=30000)
         time.sleep(2)
@@ -447,6 +461,113 @@ class ZhihuAdapter(PlatformAdapter):
             # 停在通用 /write（id 还没分配），存进去会让后面的原地更新打开一个
             # 空白编辑器，白点一次「发布」（写页主按钮就是「发布」）。
             "edit_url": f"https://zhuanlan.zhihu.com/p/{post_id}/edit",
+            "draft_only": False,
+        }
+
+    # ---------------- 回答问题（2026-10-14 新增） ----------------
+
+    def _open_answer_editor(self, page, question_url):
+        """打开问题页并展开「写回答」编辑器。成功返回 True。
+
+        真机探针（2026-10-14）钉死的两条：
+          1. 顶栏是 sticky 的，locator.click / force click 都进不去（React 只认
+             事件真实路径与 JS click），唯一稳定通道是 JS 直接 click()；
+          2. 编辑器出现要自己轮询存在性——_wait_editor(want_text=False) 在
+             「编辑器还没出现」时也满足（-1 <= 1）会提前返回，不能用它等开场。
+        """
+        page.goto(question_url, timeout=60000, wait_until="domcontentloaded")
+        time.sleep(4)  # SPA 渲染 + 登录态沉降
+        clicked = self._safe_eval(page, """() => {
+            const b = document.querySelector('button.WriteAnswerButton');
+            if (!b) return false;
+            b.scrollIntoView({ block: 'center' });
+            b.click();
+            return true;
+        }""", None, False)
+        if not clicked:
+            return False
+        deadline = time.time() + 25
+        while time.time() < deadline:
+            v = self._safe_eval(page, READY_JS, None, -1)
+            if isinstance(v, int) and v >= 0:
+                return True
+            time.sleep(1)
+        return False
+
+    def _click_answer_publish(self, page):
+        """点「发布回答」：先常规 locator，失败再 JS click（同「写回答」的教训）。"""
+        # aqg: top-level boundary 首选 locator 失败降级 JS click，两条都失败才算失败
+        try:
+            page.locator('button:text-is("发布回答")').first.click(timeout=8000)
+            return True
+        except Exception:
+            pass
+        return bool(self._safe_eval(page, """() => {
+            const norm = s => (s || '').replace(/\\u200b/g, '').trim();
+            const b = [...document.querySelectorAll('button')]
+                .find(x => norm(x.innerText) === '发布回答');
+            if (!b) return false;
+            b.click();
+            return true;
+        }""", None, False))
+
+    def publish_as_answer(self, page, article, question_url, options=None):
+        """在指定问题下写作并发布回答（真实上线；draft_only 时只填不发布）。
+
+        复用专栏链路的注入/回读纪律（回答编辑器与专栏编辑器同构，均为
+        Draft.js + 「导入→导入文档」，探针实测确认）：
+          打开编辑器 → 导入 Markdown → 点发布前回读正文 → 点「发布回答」
+          → 轮询验证（URL 出现 /answer/ 或按钮变为「修改回答」）。
+        """
+        options = options or {}
+        if not self._open_answer_editor(page, question_url):
+            self.save_debug(page, "zhihu_answer_editor_stuck")
+            raise PlatformError("知乎「写回答」编辑器未打开（问题页未登录或结构已改版）")
+
+        md_content = article.get("content_md", "")
+        import_ok = self._import_md_file(page, md_content)
+        if not import_ok:
+            self._inject_editor(page, md_content)
+        time.sleep(3)  # 等自动存草稿
+
+        # 点发布前回读：注入返回成功但没写进去的情况真实发生过，证不出就不敢点
+        st = self.read_editor_state(page, EDITOR_SEL, "")
+        c_ok, c_detail = content_evidence(md_content, st["body"])
+        self.verify_or_raise("回答正文注入", c_ok, c_detail)
+
+        if options.get("draft_only"):
+            # 知乎回答编辑器自动存草稿——不点发布，留人工确认
+            return {"post_id": "", "post_url": "", "edit_url": question_url,
+                    "draft_only": True}
+
+        if not self._click_answer_publish(page):
+            self.save_debug(page, "zhihu_answer_publish_btn")
+            raise PlatformError("知乎问题页找不到「发布回答」按钮")
+
+        deadline = time.time() + self.PUBLISH_VERIFY_TIMEOUT
+        done_mark = False
+        while time.time() < deadline:
+            if ANSWER_URL_RE.search(page.url or ""):
+                break
+            done_mark = bool(self._safe_eval(page, """() => {
+                const norm = s => (s || '').replace(/\\u200b/g, '').trim();
+                return [...document.querySelectorAll('button')]
+                    .some(b => norm(b.innerText) === '修改回答');
+            }""", None, False))
+            if done_mark:
+                break
+            time.sleep(self.PUBLISH_VERIFY_POLL)
+        else:
+            self.save_debug(page, "zhihu_answer_publish_stuck")
+            raise PlatformError(
+                "回答点了发布但未观察到发布完成（URL 无 /answer/ 且无「修改回答」）")
+
+        u = page.url or question_url
+        m = ANSWER_URL_RE.search(u)
+        return {
+            "post_id": m.group(1) if m else "",
+            "post_url": u,
+            "edit_url": question_url,   # 回答的"编辑入口"就是问题页本身
             "draft_only": False,
         }
 

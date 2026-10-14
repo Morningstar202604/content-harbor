@@ -4,138 +4,59 @@
     <!-- 全局动作进度条：加载/保存/发布任一进行中就亮 -->
     <div class="top-progress" :class="{ show: hub.loadingList || hub.saving || hub.publishing }" />
 
-    <AppHeader
-      :stats="hub.stats"
-      :ai-ready="hub.aiReady"
-      :loading="hub.loadingList"
-      :list-docked="listDocked"
-      :view="hub.view"
-      :pending-count="hub.pendingHuman.length"
-      @open-list="listDrawer = true"
-      @switch="hub.switchView($event)"
-      @reload="hub.boot()"
-      @sync="hub.syncPending()"
-      @ai-write="aiDialog = true"
-      @new="hub.newArticle()"
-    />
-
-    <!-- 写作视图：列表 + 编辑器，干净的两栏 -->
-    <main v-if="hub.view === 'write'" class="layout" :class="{ 'docked-list': listDocked }">
-      <ArticleList
-        v-if="listDocked"
-        :articles="hub.articles"
-        :current-id="hub.currentId"
-        :loading="hub.loadingList"
-        @open="onOpen"
-        @new-article="hub.newArticle()"
+    <div class="shell">
+      <SideNav
+        :view="hub.view"
+        :ai-ready="hub.aiReady"
+        :wait-count="waitCount"
+        :published-count="publishedCount"
+        @switch="hub.switchView($event)"
+        @new="newArticle"
       />
 
-      <ArticleEditor
-        v-if="hub.current"
-        :article="hub.current"
-        :is-new="!hub.currentId"
-        :dirty="hub.dirty"
-        :saving="hub.saving"
-        @save="hub.save()"
-        @touch="hub.dirty = true"
-        @publish="wizard = true"
-        @sync-update="hub.updateRemote(hub.updatable)"
-        @ai-rewrite="onRewrite"
-        @ai-polish="onPolish"
-      />
-      <div v-else class="pane pane-center">
-        <EmptyState
-          :px="58"
-          title="墨迹未干"
-          desc="挑一篇接着写，或新起一篇。写完点右上「发布」一发出网。"
-        >
-          <el-button type="primary" :icon="Plus" @click="hub.newArticle()">起一篇新文</el-button>
-          <el-button :icon="MagicStick" @click="aiDialog = true">让 AI 落笔</el-button>
-        </EmptyState>
-      </div>
-    </main>
+      <main class="shell-main">
+        <!-- 写作台常驻（v-show）：切走再切回时编辑状态不丢 -->
+        <WriteView v-show="hub.view === 'write'" @ai-write="aiDialog = true" />
+        <PublishCenterView v-if="hub.view === 'publish'" />
+        <TasksView v-else-if="hub.view === 'tasks'" />
+        <SettingsView v-else-if="hub.view === 'settings'" />
+      </main>
+    </div>
 
-    <!-- 管理视图：待人工 / 发布记录 / 平台与账号，宽屏三标签 -->
-    <main v-else class="layout single">
-      <ManagePanel />
-    </main>
-
-    <!-- 窄屏：列表改成抽屉 -->
-    <el-drawer v-if="!listDocked" v-model="listDrawer" direction="ltr" size="86%" :with-header="false">
-      <ArticleList
-        :articles="hub.articles"
-        :current-id="hub.currentId"
-        :loading="hub.loadingList"
-        @open="id => { onOpen(id); listDrawer = false }"
-      />
-    </el-drawer>
-
-    <PublishWizard v-model="wizard" :platforms="hub.platforms" />
-
-    <AIWriteDialog
-      v-model="aiDialog"
-      :platforms="hub.platforms"
-      :ready="hub.aiReady"
-      @done="hub.open($event)"
-    />
+    <AIWriteDialog v-model="aiDialog" :platforms="hub.platforms"
+                   :ready="hub.aiReady" @done="onAiDone" />
   </div>
   </el-config-provider>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { ElMessageBox } from 'element-plus'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import { Plus, MagicStick } from '@element-plus/icons-vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useHubStore } from '@/stores/hub'
-import { api } from '@/api'
-import AppHeader from '@/components/AppHeader.vue'
-import ArticleList from '@/components/ArticleList.vue'
-import ArticleEditor from '@/components/ArticleEditor.vue'
-import PublishWizard from '@/components/PublishWizard.vue'
-import ManagePanel from '@/components/ManagePanel.vue'
+import SideNav from '@/components/SideNav.vue'
+import WriteView from '@/views/WriteView.vue'
+import PublishCenterView from '@/views/PublishCenterView.vue'
+import TasksView from '@/views/TasksView.vue'
+import SettingsView from '@/views/SettingsView.vue'
 import AIWriteDialog from '@/components/AIWriteDialog.vue'
-import EmptyState from '@/components/EmptyState.vue'
 
 const hub = useHubStore()
-const { listDocked } = useBreakpoint()
 
-const listDrawer = ref(false)
-const wizard = ref(false)
 const aiDialog = ref(false)
 
+const waitCount = computed(() => hub.pendingHuman.length + hub.waitingTasks.length)
+const publishedCount = computed(() => hub.articles.filter(a => a.status === 'published').length)
+
 onMounted(() => hub.boot())
+onBeforeUnmount(() => hub.dispose())
 
-async function onOpen(id) {
-  await hub.open(id)
-  listDrawer.value = false
+function newArticle() {
+  hub.switchView('write')
+  hub.newArticle()
 }
 
-async function onRewrite() {
-  if (!hub.currentId) return
-  try {
-    const { value } = await ElMessageBox.prompt(
-      '例如：多给两个代码示例 / 语气更口语 / 压缩到 800 字',
-      'AI 改写', { inputPlaceholder: '改写要求', inputType: 'textarea' }
-    )
-    await hub.save()
-    await api.aiRewrite(hub.currentId, value)
-    await hub.open(hub.currentId)
-  } catch { /* 用户取消 */ }
-}
-
-async function onPolish() {
-  if (!hub.currentId) return
-  await hub.save()
-  await api.aiPolish(hub.currentId)
-  await hub.open(hub.currentId)
+async function onAiDone(id) {
+  hub.switchView('write')
+  if (id) await hub.open(id)
 }
 </script>
-
-<style scoped lang="scss">
-.pane-center {
-  align-items: center;
-  justify-content: center;
-}
-</style>

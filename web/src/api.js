@@ -42,7 +42,9 @@ http.interceptors.response.use(
     if (!err.response && window.__TAURI_PORT__) {
       ElMessage.error('后端服务未启动，请检查桌面端 sidecar')
     }
-    const msg = err.response?.data?.detail || err.message || '请求失败'
+    // 后端自定义异常包是 {code, message, success, data}；FastAPI 默认是 {detail}
+    const d = err.response?.data
+    const msg = d?.message || d?.detail || err.message || '请求失败'
     ElMessage.error(typeof msg === 'string' ? msg : JSON.stringify(msg))
     _retryCount = 0
     return Promise.reject(err)
@@ -71,6 +73,9 @@ export const api = {
   assistOpen: (platform, url) =>
     http.post(`/accounts/${platform}/assist`, { url }),
   refresh: (platform) => http.post(`/refresh/${platform}`),
+  logout: (platform, account = 'default') =>
+    http.delete(`/accounts/${platform}`, { params: { account } }),
+  diagnose: (platform) => http.get(`/accounts/${platform}/diagnose`),
 
   // ---------------- 统一任务查询 ----------------
   tasks: (limit = 50, kind, status) =>
@@ -87,9 +92,12 @@ export const api = {
   search: (kw) => http.get(`/articles/search/${kw}`),
 
   // ---------------- 发布 / 更新 / 同步（统一任务语义） ----------------
-  publish: (id, platforms, draftOnly = false, account = 'default', settings = {}) =>
+  // humanConfirmed：AI 稿「我已核验」显式确认；mode：auto 全自动 / assist 中断改配置 / manual 全手动
+  publish: (id, platforms, draftOnly = false, account = 'default', settings = {},
+            humanConfirmed = false, mode = 'auto') =>
     http.post(`/articles/${id}/publish`,
-              { platforms, draft_only: draftOnly, account, settings }),
+              { platforms, draft_only: draftOnly, account, settings,
+                human_confirmed: humanConfirmed, mode }),
   update: (id, platforms, account = 'default') =>
     http.post(`/articles/${id}/update`, { platforms, account }),
   syncPending: (account = 'default') =>
@@ -101,6 +109,11 @@ export const api = {
 
   // ---------------- AI Provider / 模型选择 ----------------
   aiProviders: () => http.get('/ai/providers'),
+  // ---------------- AI 配置（密钥 / 模型 / 路由 / 门禁开关） ----------------
+  aiConfig: () => http.get('/ai/config'),
+  aiConfigSave: (patch) => http.put('/ai/config', patch),
+  aiConfigTest: (body) => http.post('/ai/config/test', body),
+  aiGate: () => http.get('/ai/gate'),
 
   // ---------------- AI 写稿 ----------------
   aiWrite: (data) => http.post('/ai/write', data),

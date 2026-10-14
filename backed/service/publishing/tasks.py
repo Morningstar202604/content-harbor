@@ -26,6 +26,28 @@ from service.publishing import db
 from service.publishing import events as evt_mod
 
 
+def _has_pending_user(result) -> bool:
+    """发布结果里是否存在中断模式（assist/manual）的实例。"""
+    items = result if isinstance(result, list) else (
+        (result or {}).get("results") if isinstance(result, dict) else None) or []
+    return any(isinstance(r, dict) and r.get("pending_user") for r in items)
+
+
+def _pending_user_message(result) -> str:
+    items = result if isinstance(result, list) else (
+        (result or {}).get("results") if isinstance(result, dict) else None) or []
+    msgs = [r.get("message") for r in items if isinstance(r, dict) and r.get("pending_user")]
+    return msgs[0] if msgs else "平台页已打开，等待你在平台上确认后发布"
+
+
+def _load_result(task) -> object:
+    """把任务的 result 列解析成对象（解析失败给空）。"""
+    try:
+        return json.loads(task.get("result") or "[]")
+    except Exception:   # aqg: top-level boundary（result 列损坏时按空处理，不炸任务查询）
+        return []
+
+
 class TaskManager:
     """后台任务队列。线程安全：submit/get/list/resume 可跨线程调用。"""
 
@@ -76,14 +98,26 @@ class TaskManager:
         return db.list_tasks(self.conn, limit=limit, kind=kind, status=status)
 
     def resume(self, task_id, approved=True):
-        """恢复 waiting_human 任务：approved=True 重跑；False 标记放弃。"""
+        """恢复 waiting_human 任务。
+
+        两种语义（2026-10-14）：
+        - **中断模式（pending_user）**：用户在平台上已亲自发布 → approved=True 只
+          **标记完成**（绝不重跑——重跑会在平台上发第二遍）；approved=False 标记放弃。
+        - **风控中断（任务执行中失败）**：approved=True 重跑；False 放弃。
+        """
         with self._lock:
             task = db.get_task(self.conn, task_id)
             if not task:
                 return {"ok": False, "error": "任务不存在"}
             if task["status"] != "waiting_human":
                 return {"ok": False, "error": f"任务当前状态为 {task['status']}，不可恢复"}
-            if approved:
+            was_pending_user = _has_pending_user(_load_result(task))
+            if approved and was_pending_user:
+                # 用户在平台上已自行发布：标记完成并落库（不再跑发布逻辑）
+                db.update_task(self.conn, task_id, status="ok",
+                               message="用户已在平台上完成发布（中断模式收尾）",
+                               finished_at=time.time())
+            elif approved:
                 db.update_task(self.conn, task_id,
                                status="pending", error="",
                                message="人工已处理，重新执行")
@@ -91,7 +125,7 @@ class TaskManager:
                 db.update_task(self.conn, task_id,
                                status="failed", message="已放弃",
                                finished_at=time.time())
-        if approved:
+        if approved and not was_pending_user:
             self._wake.set()
         return {"ok": True, "status": db.get_task(self.conn, task_id)["status"]}
 
@@ -133,6 +167,23 @@ class TaskManager:
                        message="执行中…")
         try:
             result = self._dispatch(kind, task)
+            if _has_pending_user(result):
+                # 中断模式（assist/manual）：浏览器已打开、等用户在平台上操作。
+                # 不是失败（不重试）、也不是完成（不标 ok）——挂 waiting_human，
+                # 用户处理完走 resume（resume 对 pending_user 是"标记完成"语义，
+                # 不重跑，避免重复发布）。
+                msg = _pending_user_message(result)
+                db.update_task(self.conn, task_id, status="waiting_human",
+                               result=json.dumps(result, ensure_ascii=False),
+                               message=msg, error="")
+                completed = db.get_task(self.conn, task_id)
+                if completed:
+                    try:
+                        completed["platforms"] = json.loads(completed.get("platforms") or "[]")
+                    except Exception:   # aqg: top-level boundary（事件装饰字段解析失败不阻断 emit）
+                        pass
+                    evt_mod.on_task_complete(completed)
+                return
             db.update_task(self.conn, task_id, status="ok",
                            result=json.dumps(result, ensure_ascii=False),
                            message="完成", finished_at=time.time())
@@ -142,7 +193,7 @@ class TaskManager:
                 try:
                     completed["platforms"] = json.loads(completed.get("platforms") or "[]")
                     completed["result"] = json.loads(completed.get("result") or "{}")
-                except Exception:
+                except Exception:   # aqg: top-level boundary（同上：装饰字段解析失败不阻断 emit）
                     pass
                 evt_mod.on_task_complete(completed)
         except Exception as e:
@@ -181,7 +232,9 @@ class TaskManager:
         if kind == "publish":
             extra = json.loads(task.get("result") or "{}")
             return self.hub.publish(article_id, platforms, account, draft_only,
-                                    settings=extra.get("settings"))
+                                    settings=extra.get("settings"),
+                                    human_confirmed=bool(extra.get("human_confirmed")),
+                                    mode=extra.get("mode") or None)
         if kind == "update":
             return self.hub.update(article_id, platforms, account)
         if kind == "sync":

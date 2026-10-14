@@ -54,6 +54,16 @@ class LockedConnection(sqlite3.Connection):
         with self._exec_lock:
             return super().rollback()
 
+    def close(self):
+        """close 同样要串行化（2026-10-14）。
+
+        close 若不持锁、落在别的线程并发 execute/executescript 中间，底层连接
+        被抽走 → CPython sqlite3 在 Windows 上直接访问违例（高负载下概率上升，
+        实测全量测试偶发整进程崩）。close 本身幂等，重复调用安全。
+        """
+        with self._exec_lock:
+            return super().close()
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,

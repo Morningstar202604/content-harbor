@@ -53,6 +53,7 @@ uv run uvicorn app.factory:create_app --host 0.0.0.0 --port 8000 --reload
 | 能力 | 说明 |
 |---|---|
 | 一键多投 | 选平台 → 发布 → 全平台同步，间隔 8-20s 防风控 |
+| 回答问题 | 知乎：发布轨粘贴问题链接即写回答（留空则发专栏文章），回读+发布双验证 |
 | 原地更新 | 改一处，已发布文章全平台同步，不产生重复内容 |
 | 定时发布 | 一次性 / 每天 / 每周 / cron，到期自动投递 |
 | AI 写稿 | 8 个 Provider 路由，故障自动转移 |
@@ -118,7 +119,7 @@ bash scripts/check_all.sh            # Linux/macOS
 
 # 单跑
 cd backed
-uv run pytest -q                     # 339 用例
+uv run pytest -q                     # 379 用例
 uv run ruff check .                  # 静态
 ```
 ## 备份

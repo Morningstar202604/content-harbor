@@ -15,7 +15,8 @@ class PublishIn(BaseModel):
     platforms: List[str]
     account: str = "default"
     draft_only: bool = False
-    live: bool = False
+    human_confirmed: bool = False   # AI 稿「我已核验」显式确认，允许正式发布（留痕 ext）
+    mode: str = "auto"              # auto 全自动 / assist 中断改配置 / manual 全手动
     settings: Optional[Dict[str, Dict]] = None
 
 
@@ -33,9 +34,43 @@ class ResumeIn(BaseModel):
 
 @router.post("/articles/{aid}/publish")
 def publish(aid: int, body: PublishIn):
-    """异步发布：提交到统一任务引擎，立即返回 task_id。"""
-    task_id = get_hub().tasks.submit("publish", article_id=aid, platforms=body.platforms,
+    """异步发布：提交到统一任务引擎，立即返回 task_id。
+
+    draft_only=False 为真实上线（AI 源文章需 human_confirmed=True 或开启
+    AI_DIRECT_PUBLISH，否则门禁 422 拒绝）。
+
+    预检（同步、确定性）：任务引擎是异步的，若把门禁拒绝全留给任务，
+    用户要到任务跑完才知道被拒——高危内容 / AI 未确认这两种确定性拒绝
+    在提交前就地 422（完整门禁含 LLM 二审仍在任务里跑，作兜底）。
+    """
+    from service.publishing import gate as aigc_gate
+
+    hub = get_hub()
+    art = hub.get(aid)
+    if not art:
+        raise HTTPException(404, f"文章 {aid} 不存在")
+    if body.mode not in ("auto", "assist", "manual"):
+        raise HTTPException(422, f"未知发布模式: {body.mode}（可选 auto/assist/manual）")
+    # 中断/手动模式：用户在平台上亲自确认，无需勾选核验；auto 模式仍走人审闸门
+    if not body.draft_only and aigc_gate.is_enabled() and body.mode == "auto":
+        hits = aigc_gate.scan_dangerous(art.get("content_md", ""), art.get("title", ""))
+        if hits:
+            raise HTTPException(422, f"合规门禁拒绝发布: 高危内容 {hits}")
+        if aigc_gate.is_ai_sourced(art) and not body.human_confirmed \
+                and not aigc_gate.is_ai_direct_publish():
+            raise HTTPException(
+                422, "合规门禁拒绝发布: AI 生成内容全自动发布需人工确认"
+                     "（勾选「我已核验」，或改用「中断改配置」亲自在平台上发布）")
+    elif not body.draft_only and aigc_gate.is_enabled():
+        # 中断/手动模式仍做高危扫描（确定性安全项），人审由用户亲自操作承接
+        hits = aigc_gate.scan_dangerous(art.get("content_md", ""), art.get("title", ""))
+        if hits:
+            raise HTTPException(422, f"合规门禁拒绝发布: 高危内容 {hits}")
+
+    task_id = hub.tasks.submit("publish", article_id=aid, platforms=body.platforms,
                                account=body.account, draft_only=body.draft_only,
+                               human_confirmed=body.human_confirmed,
+                               mode=body.mode,
                                settings=body.settings)
     return {"task_id": task_id, "status": "pending", "poll": f"/tasks/{task_id}"}
 

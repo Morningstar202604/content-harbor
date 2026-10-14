@@ -10,8 +10,9 @@ OWASP Agentic Top10「输出不可信 / 工具滥用 / 目标劫持」的落地�
      平台若支持元数据则携带，至少入库可追溯（法规要求"显式标识"）
   3. 双模型审查 —— 配了 REVIEW_MODEL 用第二模型审一遍（事实/口径/合规），
      未配则降级本地 heuristic 审查（确定性检查，不依赖外网）
-  4. 发布闸门 —— source=ai 的文章强制 draft_only，必须人工二次确认
-     才能正式 publish（人审 in-the-loop，防 AI 内容直接裸奔上线）
+  4. 发布闸门 —— source=ai 的文章正式发布（非 draft_only）需人工确认
+     （human_confirmed=True，前端显式勾选并留痕）或用户开启 AI_DIRECT_PUBLISH；
+     否则必须走 draft_only 草稿 + 人工确认（人审 in-the-loop，防 AI 内容裸奔上线）
 
 设计原则：
   - 纯本地 heuristic 是底线，保证无网/无第二模型时门禁仍生效
@@ -24,7 +25,9 @@ import re
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+# config.json 的文档位置是 backed/config.json（与 .gitignore / api/auth.py 一致；
+# 2026-10-14 修复：旧代码 parent.parent 指到 backed/service/，门禁开关读不到文档位置）
+ROOT = Path(__file__).resolve().parents[2]
 CONFIG_FILE = ROOT / "config.json"
 
 # 高危词（保守起量，宁多勿漏；可按需扩展）
@@ -43,7 +46,10 @@ DANGEROUS_REGEX = [
     r"破解\s*(卡密|激活码|序列号)\s*出售",
 ]
 
-# AIGC 标识文案（2026 法规要求"显式标识"，加在文末）
+# AIGC 标识文案（可选：仅当 AI_DECLARATION_IN_TEXT=true 时追加进正文）。
+# 2026-10-14 起默认**不写进正文**——标识义务改由平台自带的「AI 辅助」选项承担
+# （知乎发布设置里的 AI 辅助开关，见 adapters/zhihu._fill_publish_settings）。
+# 无原生选项的平台（博客园 MetaWeblog / 掘金 API 等）可把该开关打开恢复正文声明。
 AIGC_NOTICE = "\n\n---\n> 本文由 AI 辅助生成，发布前已经过合规审查与人工确认。"
 
 
@@ -59,6 +65,16 @@ def is_enabled() -> bool:
     """门禁开关。默认开；可经 config.json "AIGC_GATE": false 关闭（不推荐）。"""
     v = _cfg("AIGC_GATE", True)
     return str(v).lower() not in ("false", "0", "no")
+
+
+def is_ai_direct_publish() -> bool:
+    """AI 稿直发开关。默认 false（先草稿+人工确认）。
+
+    config.json "AI_DIRECT_PUBLISH": true 时，AI 源文章经
+    安全扫描 + 二审 + AIGC 标识后可直接正式发布，不再要求人工确认。
+    """
+    v = _cfg("AI_DIRECT_PUBLISH", False)
+    return str(v).lower() in ("true", "1", "yes")
 
 
 def is_ai_sourced(article: dict) -> bool:
@@ -78,9 +94,20 @@ def scan_dangerous(content: str, title: str = "") -> list:
     return hits
 
 
-def add_aigc_label(article: dict, model: str = "") -> dict:
-    """给 AI 源文章打显式标识，写进 ext（入库可追溯）+ 文末声明。
+def is_declaration_in_text() -> bool:
+    """正文是否追加 AI 声明。默认关（2026-10-14 用户要求：改走平台「AI 辅助」选项）。
 
+    无原生 AI 选项的平台（纯 API 发布）可置 config.json
+    "AI_DECLARATION_IN_TEXT": true 恢复正文声明。
+    """
+    v = _cfg("AI_DECLARATION_IN_TEXT", False)
+    return str(v).lower() in ("true", "1", "yes")
+
+
+def add_aigc_label(article: dict, model: str = "") -> dict:
+    """给 AI 源文章打标识：ext 留痕（必须，可追溯）＋ 可选正文声明。
+
+    正文声明受 AI_DECLARATION_IN_TEXT 控制，默认不加（平台原生选项负责显式标识）。
     返回更新后的 article dict。
     """
     ext = {}
@@ -94,11 +121,11 @@ def add_aigc_label(article: dict, model: str = "") -> dict:
     ext["aigc_at"] = time.time()
     article["ext"] = json.dumps(ext, ensure_ascii=False)
 
-    content = article.get("content_md", "")
-    # 幂等：已有标识就不重复加
-    if "本文由 AI 辅助生成" not in content:
-        content = content.rstrip() + AIGC_NOTICE
-        article["content_md"] = content
+    if is_declaration_in_text():
+        content = article.get("content_md", "")
+        # 幂等：已有标识就不重复加
+        if "本文由 AI 辅助生成" not in content:
+            article["content_md"] = content.rstrip() + AIGC_NOTICE
     return article
 
 
@@ -191,31 +218,43 @@ class GateError(Exception):
     """门禁拒绝发布。"""
 
 
-def gate_publish(article: dict, draft_only: bool = False) -> dict:
-    """发布前强制过闸。AI 源文章非 draft_only 时直接拒（人审闸门）。
+def gate_publish(article: dict, draft_only: bool = False,
+                 human_confirmed: bool = False) -> dict:
+    """发布前强制过闸。
 
-    返回 {approved, issues, aigc_labeled, review}。
+    AI 源文章的正式发布（draft_only=False）需要满足其一：
+      - human_confirmed=True：人工核验（前端「确认上线」显式勾选，留痕 ext）
+      - config.json "AI_DIRECT_PUBLISH": true：用户明确开启直发
+    两者都没有 → 拒（人审 in-the-loop，防 AI 内容裸奔上线）。
+
+    返回 {approved, issues, aigc_labeled, review, human_confirmed}。
     """
     if not is_enabled():
         return {"approved": True, "issues": [], "aigc_labeled": False,
-                "review": {"verdict": "skipped", "issues": [], "reviewer": "gate-off"}}
+                "review": {"verdict": "skipped", "issues": [], "reviewer": "gate-off"},
+                "human_confirmed": human_confirmed}
 
     review = dual_model_review(article)
-    approved = (review["verdict"] == "pass") and (draft_only or not is_ai_sourced(article))
+    ai_src = is_ai_sourced(article)
+    allow_live = draft_only or not ai_src or human_confirmed or is_ai_direct_publish()
+    approved = (review["verdict"] == "pass") and allow_live
     issues = list(review["issues"])
 
-    # AI 源非草稿发布 -> 人审闸门拦
-    if review["verdict"] == "pass" and is_ai_sourced(article) and not draft_only:
+    # AI 源正式发布且未确认、未开直发 -> 人审闸门拦
+    if review["verdict"] == "pass" and ai_src and not draft_only \
+            and not human_confirmed and not is_ai_direct_publish():
         approved = False
-        issues.append("AI 生成内容须先以草稿(draft_only)发布并经人工确认，禁止直接上线")
+        issues.append("AI 生成内容默认须先发草稿并经人工确认后才能正式上线"
+                      "（前端勾选「我已核验」确认，或在设置开启 AI 稿直发）")
 
-    return {"approved": approved, "issues": issues, "aigc_labeled": is_ai_sourced(article),
-            "review": review}
+    return {"approved": approved, "issues": issues, "aigc_labeled": ai_src,
+            "review": review, "human_confirmed": human_confirmed}
 
 
-def apply_gate_before_publish(article: dict, draft_only: bool = False) -> dict:
+def apply_gate_before_publish(article: dict, draft_only: bool = False,
+                              human_confirmed: bool = False) -> dict:
     """一键闸门：过 gate_publish，通过则给 AI 源打标 AIGC 标识。失败抛 GateError。"""
-    r = gate_publish(article, draft_only=draft_only)
+    r = gate_publish(article, draft_only=draft_only, human_confirmed=human_confirmed)
     if not r["approved"]:
         raise GateError("；".join(r["issues"]) or "合规门禁拒绝")
     if r["aigc_labeled"]:

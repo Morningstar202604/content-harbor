@@ -175,7 +175,7 @@ class AIService:
 
     def list_models(self):
         """列出所有可用的 Provider + 模型。"""
-        from service.publishing import providers as prov_mod
+        from service.publishing import ai_providers as prov_mod
         return prov_mod.list_providers()
 
     def list_ai_templates(self):
